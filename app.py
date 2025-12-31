@@ -32,6 +32,7 @@ with st.sidebar:
     with c2: clicks = st.number_input("클릭수", min_value=0, value=10)
     cost = st.number_input("비용", min_value=0, value=100000)
     
+    # [기능 유지] 데이터 '기록' 버튼을 누를 때마다 리스트에 추가됨
     if st.button("➕ 데이터 기록", use_container_width=True):
         st.session_state.daily_data.append({
             "날짜": t_date, "매체": m_name, "상품": p_name,
@@ -55,16 +56,16 @@ st.title("🎯 매체 성과 대시보드")
 if st.session_state.daily_data:
     df = pd.DataFrame(st.session_state.daily_data)
     
-    # [개선 1] 날짜 형식 변환 및 자동 정렬 (날짜 순서로 나열)
+    # [업데이트 1] 날짜 자동 정렬
     df['날짜'] = pd.to_datetime(df['날짜'])
     df = df.sort_values(by='날짜', ascending=True)
     
-    # [개선 2] 지표 계산 (CTR, CPC, CPM 추가)
+    # 지표 계산
     df['CTR'] = (df['Clicks'] / df['Imps'] * 100).fillna(0)
     df['CPC'] = (df['Cost'] / df['Clicks']).replace([float('inf')], 0).fillna(0)
     df['CPM'] = (df['Cost'] / df['Imps'] * 1000).replace([float('inf')], 0).fillna(0)
     
-    # [상단 KPI 카드]
+    # 상단 요약 카드
     st.subheader("📍 성과 요약")
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("총 비용", f"₩{df['Cost'].sum():,}")
@@ -74,12 +75,32 @@ if st.session_state.daily_data:
 
     st.divider()
 
-    # [중단 차트 영역]
+    # 중단 차트 영역
     col_l, col_r = st.columns([2, 1])
-
     with col_l:
         st.markdown("### 📈 성과 추이")
         m_choice = st.radio("표시 지표:", ["CTR", "Cost", "Clicks"], horizontal=True)
+        # 괄호 닫힘 확인 완료 (에러 지점)
         fig_line = px.line(df, x="날짜", y=m_choice, color="매체", markers=True,
                            template="plotly_white", title=f"일별 {m_choice} 변화")
-        st.plotly_chart(fig_line, use_container_
+        st.plotly_chart(fig_line, use_container_width=True)
+
+    with col_r:
+        st.markdown("### 📊 비용 비중")
+        fig_pie = px.pie(df, values='Cost', names='매체', hole=0.5, template="plotly_white")
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    # [업데이트 2] 표 열 순서 조절 및 데이터 확인
+    st.divider()
+    st.subheader("📝 전체 데이터 확인")
+    
+    # 요청하신 순서: 날짜, 매체, 상품, imp, click, ctr, cpc, cpm, cost
+    display_df = df[['날짜', '매체', '상품', 'Imps', 'Clicks', 'CTR', 'CPC', 'CPM', 'Cost']]
+    
+    # 날짜 포맷 깔끔하게 변경
+    display_df['날짜'] = display_df['날짜'].dt.strftime('%Y-%m-%d')
+    
+    st.dataframe(display_df, use_container_width=True)
+
+else:
+    st.info("사이드바에서 데이터를 입력하고 '데이터 기록' 버튼을 누르세요.")
