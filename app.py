@@ -1,72 +1,79 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
+from datetime import datetime
 
 # 페이지 설정
-st.set_page_config(page_title="AE 매체 분석 툴", layout="wide")
+st.set_page_config(page_title="AE 데일리 성과 분석", layout="wide")
 
-st.title("🎯 매체 성과 측정 분석")
-st.write("왼쪽 사이드바에 수치를 입력하고 버튼을 누르세요.")
+st.title("📅 데일리 매체 성과 분석")
+st.write("날짜별 성과를 기록하고 시각화 추이를 확인하세요.")
 
 # 데이터 저장소 초기화
-if 'media_data' not in st.session_state:
-    st.session_state.media_data = []
+if 'daily_data' not in st.session_state:
+    st.session_state.daily_data = []
 
 # 사이드바 입력창
 with st.sidebar:
     st.header("입력창")
+    # [개선] 날짜 선택 기능 추가
+    target_date = st.date_input("날짜 선택", datetime.now())
     m_name = st.text_input("매체명", "네이버")
     p_name = st.text_input("상품명", "GFA")
-    d_type = st.radio("디바이스", ["MO", "PC"])
-    imps = st.number_input("노출수", value=100000, step=1000)
-    clicks = st.number_input("클릭수", value=1000, step=10)
-    cost = st.number_input("비용", value=1000000, step=10000)
     
-    if st.button("➕ 데이터 추가", use_container_width=True):
-        st.session_state.media_data.append({
-            "ID": len(st.session_state.media_data), # 삭제를 위한 고유 ID
-            "분석단위": f"{m_name}_{p_name}_{d_type}",
-            "Imps": imps, "Clicks": clicks, "Cost": cost
+    col1, col2 = st.columns(2)
+    with col1:
+        imps = st.number_input("노출수", value=0, step=1000)
+        cost = st.number_input("비용", value=0, step=10000)
+    with col2:
+        clicks = st.number_input("클릭수", value=0, step=10)
+    
+    if st.button("➕ 데이터 기록", use_container_width=True):
+        st.session_state.daily_data.append({
+            "날짜": target_date,
+            "매체": m_name,
+            "상품": p_name,
+            "Imps": imps, 
+            "Clicks": clicks, 
+            "Cost": cost,
+            "ID": f"{target_date}_{m_name}_{p_name}"
         })
 
-# 데이터가 있을 때만 실행
-if st.session_state.media_data:
-    df = pd.DataFrame(st.session_state.media_data)
+# 데이터 처리
+if st.session_state.daily_data:
+    df = pd.DataFrame(st.session_state.daily_data)
+    df['날짜'] = pd.to_datetime(df['날짜'])
+    df = df.sort_values(by='날짜') # 날짜순 정렬
     
     # 지표 계산
-    df['CTR'] = (df['Clicks'] / df['Imps']) * 100
-    df['CPM'] = (df['Cost'] / df['Imps']) * 1000
+    df['CTR'] = (df['Clicks'] / df['Imps']).fillna(0) * 100
+    df['CPC'] = (df['Cost'] / df['Clicks']).replace([float('inf'), -float('inf')], 0).fillna(0)
     
-    # --- [개선 1] 데이터 요약 및 삭제 섹션 ---
-    st.divider()
-    st.subheader("📊 데이터 관리")
+    # --- 데이터 관리 ---
+    st.subheader("📊 누적 데이터 내역")
+    # 삭제 기능 (날짜와 매체명을 조합해서 선택)
+    delete_options = df['ID'].tolist()
+    to_delete = st.multiselect("🗑️ 삭제할 데이터(ID) 선택", options=delete_options)
     
-    # 삭제 기능 추가: 멀티셀렉트로 선택해서 삭제
-    delete_options = df['분석단위'].tolist()
-    to_delete = st.multiselect("🗑️ 삭제할 데이터를 선택하세요 (중복 가능)", options=delete_options)
-    
-    if st.button("선택한 데이터 삭제"):
-        # 선택되지 않은 데이터만 남기기
-        st.session_state.media_data = [d for d in st.session_state.media_data if d['분석단위'] not in to_delete]
+    if st.button("선택 삭제"):
+        st.session_state.daily_data = [d for d in st.session_state.daily_data if d['ID'] not in to_delete]
         st.rerun()
 
-    # 테이블 출력 (간격을 위해 컨테이너 사용)
-    st.dataframe(df[['분석단위', 'Imps', 'Clicks', 'Cost', 'CTR', 'CPM']], use_container_width=True)
+    st.dataframe(df.drop(columns=['ID']), use_container_width=True)
 
-    # --- [개선 2] 시각화 섹션 (여유로운 간격 배치) ---
-    st.markdown("<br><br>", unsafe_allow_html=True) # 줄바꿈으로 간격 확보
+    # --- [개선] 날짜별 추이 차트 ---
+    st.markdown("<br><br>", unsafe_allow_html=True)
     st.divider()
+    st.subheader("📈 일자별 성과 추이")
     
-    st.subheader("📈 가성비 차트 분석")
-    st.info("차트 종류는 추후 AE님이 원하는 분석 모델에 맞춰 변경 가능합니다.")
+    # 지표 선택 (CTR을 볼지, CPC를 볼지 선택 가능)
+    metric = st.selectbox("확인할 지표를 선택하세요", ["CTR", "CPC", "Cost", "Clicks"])
     
-    # 차트 가독성을 위해 넓게 배치
-    fig = px.scatter(df, x="CPM", y="CTR", size="Cost", color="분석단위", 
-                     text="분석단위", size_max=40, height=500)
+    fig = px.line(df, x="날짜", y=metric, color="매체", markers=True,
+                  title=f"날짜별 {metric} 변화 추이",
+                  labels={"날짜": "일자", metric: f"{metric} 수치"})
     
-    fig.update_traces(textposition='top center')
     st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("데이터를 입력하면 분석 리포트가 생성됩니다.")
+    st.info("데이터를 기록하면 날짜별 성과 그래프가 생성됩니다.")
