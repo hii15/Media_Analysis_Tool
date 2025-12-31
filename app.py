@@ -4,7 +4,7 @@ import plotly.express as px
 from datetime import datetime
 
 # 1. 페이지 설정
-st.set_page_config(page_title="AE 매체/유형별 대시보드", layout="wide")
+st.set_page_config(page_title="AE 퍼포먼스 대시보드 (소재별 분석)", layout="wide")
 
 # 스타일 설정
 st.markdown("""
@@ -25,12 +25,19 @@ with st.sidebar:
     st.header("⚙️ 데이터 입력")
     t_date = st.date_input("날짜", datetime.now())
     
-    # [추가] 소재 유형 구분 (배너 vs 영상)
     c_type = st.radio("소재 유형", ["배너(DA)", "영상(Video)"], horizontal=True)
-    
     m_name = st.selectbox("매체", ["네이버", "카카오", "구글", "메타", "유튜브", "기타"])
-    p_name = st.text_input("상품명", "웹툰빅배너")
     
+    # [개선] 소재명 입력 (디폴트 값 제공 및 사용자 수정 가능)
+    st.divider()
+    creative_default = ["소재 A", "소재 B", "소재 C", "직접 입력"]
+    selected_creative = st.selectbox("소재 선택/입력", creative_default)
+    
+    if selected_creative == "직접 입력":
+        creative_name = st.text_input("소재명을 입력하세요", "신규 소재_01")
+    else:
+        creative_name = selected_creative
+
     c1, c2 = st.columns(2)
     with c1: imps = st.number_input("노출수", min_value=0, value=1000)
     with c2: clicks = st.number_input("클릭수", min_value=0, value=10)
@@ -38,9 +45,9 @@ with st.sidebar:
     
     if st.button("➕ 데이터 기록", use_container_width=True):
         st.session_state.daily_data.append({
-            "날짜": t_date, "유형": c_type, "매체": m_name, "상품": p_name,
+            "날짜": t_date, "유형": c_type, "매체": m_name, "소재명": creative_name,
             "Imps": imps, "Clicks": clicks, "Cost": cost,
-            "ID": f"{t_date}_{c_type}_{m_name}_{len(st.session_state.daily_data)}"
+            "ID": f"{t_date}_{m_name}_{creative_name}_{len(st.session_state.daily_data)}"
         })
         st.rerun()
 
@@ -54,7 +61,7 @@ with st.sidebar:
             st.rerun()
 
 # --- 메인 화면 ---
-st.title("🎯 매체/유형별 성과 대시보드")
+st.title("🎯 소재별 성과 대시보드")
 
 if st.session_state.daily_data:
     df = pd.DataFrame(st.session_state.daily_data)
@@ -66,9 +73,9 @@ if st.session_state.daily_data:
     df['CPC'] = (df['Cost'] / df['Clicks']).replace([float('inf')], 0).fillna(0)
     df['CPM'] = (df['Cost'] / df['Imps'] * 1000).replace([float('inf')], 0).fillna(0)
     
-    # [추가] 차트 필터링: 통합 / 배너별 / 영상별
+    # 보기 설정 필터
     st.divider()
-    view_option = st.segmented_control("📊 보기 설정", ["통합", "배너(DA)", "영상(Video)"], default="통합")
-    
-    if view_option == "통합":
-        plot_df = df
+    col_f1, col_f2 = st.columns([1, 1])
+    with col_f1:
+        view_type = st.segmented_control("📊 유형 필터", ["통합", "배너(DA)", "영상(Video)"], default="통합")
+    with col_f2
