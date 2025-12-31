@@ -25,7 +25,7 @@ with st.sidebar:
     st.header("⚙️ 데이터 입력")
     t_date = st.date_input("날짜", datetime.now())
     m_name = st.selectbox("매체", ["네이버", "카카오", "구글", "메타", "기타"])
-    p_name = st.text_input("상품명", "GFA")
+    p_name = st.text_input("상품명", "웹툰빅배너")
     
     c1, c2 = st.columns(2)
     with c1: imps = st.number_input("노출수", min_value=0, value=1000)
@@ -54,12 +54,15 @@ st.title("🎯 매체 성과 대시보드")
 
 if st.session_state.daily_data:
     df = pd.DataFrame(st.session_state.daily_data)
-    df['날짜'] = pd.to_datetime(df['날짜'])
-    df = df.sort_values('날짜')
     
-    # 지표 계산
+    # [개선 1] 날짜 형식 변환 및 자동 정렬 (날짜 순서로 나열)
+    df['날짜'] = pd.to_datetime(df['날짜'])
+    df = df.sort_values(by='날짜', ascending=True)
+    
+    # [개선 2] 지표 계산 (CTR, CPC, CPM 추가)
     df['CTR'] = (df['Clicks'] / df['Imps'] * 100).fillna(0)
     df['CPC'] = (df['Cost'] / df['Clicks']).replace([float('inf')], 0).fillna(0)
+    df['CPM'] = (df['Cost'] / df['Imps'] * 1000).replace([float('inf')], 0).fillna(0)
     
     # [상단 KPI 카드]
     st.subheader("📍 성과 요약")
@@ -72,27 +75,11 @@ if st.session_state.daily_data:
     st.divider()
 
     # [중단 차트 영역]
-    col_l, col_r = st.columns([2, 1]) # 왼쪽을 더 넓게
+    col_l, col_r = st.columns([2, 1])
 
     with col_l:
         st.markdown("### 📈 성과 추이")
-        # 에러 방지용 안전한 지표 선택
         m_choice = st.radio("표시 지표:", ["CTR", "Cost", "Clicks"], horizontal=True)
-        
-        # 데이터가 1개일 때도 에러 나지 않게 처리
         fig_line = px.line(df, x="날짜", y=m_choice, color="매체", markers=True,
                            template="plotly_white", title=f"일별 {m_choice} 변화")
-        st.plotly_chart(fig_line, use_container_width=True)
-
-    with col_r:
-        st.markdown("### 📊 비용 비중")
-        fig_pie = px.pie(df, values='Cost', names='매체', hole=0.5,
-                         template="plotly_white")
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-    # [하단 테이블]
-    with st.expander("📝 전체 데이터 확인"):
-        st.table(df[['날짜', '매체', '상품', 'Imps', 'Clicks', 'Cost', 'CTR', 'CPC']])
-
-else:
-    st.info("데이터를 입력하면 대시보드가 활성화됩니다.")
+        st.plotly_chart(fig_line, use_container_
