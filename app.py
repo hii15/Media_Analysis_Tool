@@ -25,11 +25,9 @@ with st.sidebar:
     st.header("⚙️ 데이터 입력")
     t_date = st.date_input("날짜", datetime.now())
     
-    # 유형 및 매체 선택
     c_type = st.radio("소재 유형", ["배너(DA)", "영상(Video)"], horizontal=True)
     m_name = st.selectbox("매체", ["네이버", "카카오", "구글", "메타", "유튜브", "네트워크매체", "인벤", "루리웹", "디시인사이드"])
     
-    # 소재명 입력 (기본값 제공 및 직접 입력 가능)
     st.divider()
     creative_options = ["소재 A", "소재 B", "소재 C", "직접 입력"]
     selected_opt = st.selectbox("소재 선택/입력", creative_options)
@@ -39,9 +37,8 @@ with st.sidebar:
     else:
         creative_name = selected_opt
 
-    # 수치 입력
     c1, c2 = st.columns(2)
-    with c1: imps = st.number_input("노출수(Imp)", min_value=0, value=1000)
+    with c1: imps = st.number_input("노출수(Imp)", min_value=1, value=1000) # [수정] 0 나누기 방지를 위해 min 1 설정
     with c2: clicks = st.number_input("클릭수(Click)", min_value=0, value=10)
     cost = st.number_input("비용(Cost)", min_value=0, value=100000)
     
@@ -53,7 +50,6 @@ with st.sidebar:
         })
         st.rerun()
 
-    # 데이터 삭제 관리
     if st.session_state.daily_data:
         st.divider()
         st.subheader("🗑️ 데이터 관리")
@@ -67,21 +63,20 @@ with st.sidebar:
 st.title("🎯 소재별 통합 성과 대시보드")
 
 if st.session_state.daily_data:
-    # 데이터프레임 생성 및 정렬
     df = pd.DataFrame(st.session_state.daily_data)
     df['날짜'] = pd.to_datetime(df['날짜'])
-    df = df.sort_values(by='날짜', ascending=True) # [요청] 날짜순 자동 나열
+    df = df.sort_values(by='날짜', ascending=True)
     
-    # 지표 계산 (CTR, CPC, CPM)
+    # 지표 계산
     df['CTR'] = (df['Clicks'] / df['Imps'] * 100).fillna(0)
     df['CPC'] = (df['Cost'] / df['Clicks']).replace([float('inf')], 0).fillna(0)
     df['CPM'] = (df['Cost'] / df['Imps'] * 1000).replace([float('inf')], 0).fillna(0)
     
-    # --- 상단 필터 레이아웃 ---
     st.divider()
     f_col1, f_col2 = st.columns(2)
     with f_col1:
-        v_type = st.radio("📊 유형 필터", ["통합", "배너(DA)", "영상(Video)"], horizontal=True)
+        # [수정] 최신 버전 Streamlit 권장 함수 사용 (segmented_control 사용 가능 시 변경 권장)
+        v_type = st.pills("📊 유형 필터", ["통합", "배너(DA)", "영상(Video)"], default="통합") 
     with f_col2:
         m_list = ["전체 매체"] + sorted(df['매체'].unique().tolist())
         v_media = st.selectbox("🎯 매체 필터", m_list)
@@ -93,36 +88,39 @@ if st.session_state.daily_data:
     if v_media != "전체 매체":
         plot_df = plot_df[plot_df['매체'] == v_media]
 
-    # --- 핵심 성과 요약 (KPI) ---
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("총 비용", f"₩{plot_df['Cost'].sum():,}")
-    k2.metric("평균 CTR", f"{plot_df['CTR'].mean():.2f}%")
-    k3.metric("평균 CPC", f"₩{int(plot_df['CPC'].mean()):,}")
-    k4.metric("평균 CPM", f"₩{int(plot_df['CPM'].mean()):,}")
+    # --- KPI 요약 ---
+    if not plot_df.empty: # [수정] 필터링 결과가 없을 때 에러 방지
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("총 비용", f"₩{plot_df['Cost'].sum():,}")
+        k2.metric("평균 CTR", f"{plot_df['CTR'].mean():.2f}%")
+        k3.metric("평균 CPC", f"₩{int(plot_df['CPC'].mean()):,}")
+        k4.metric("평균 CPM", f"₩{int(plot_df['CPM'].mean()):,}")
 
-    # --- 차트 영역 ---
-    st.markdown("<br>", unsafe_allow_html=True)
-    c_col_l, c_col_r = st.columns([2, 1])
-    
-    with c_col_l:
-        st.markdown(f"#### 📈 {v_type} 성과 추이")
-        m_choice = st.radio("지표 선택:", ["CTR", "Cost", "Clicks", "CPM"], horizontal=True)
-        # 소재별 성과를 선으로 구분
-        fig_line = px.line(plot_df, x="날짜", y=m_choice, color="소재명", symbol="매체",
-                           markers=True, template="plotly_white", height=450)
-        st.plotly_chart(fig_line, use_container_width=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        c_col_l, c_col_r = st.columns([2, 1])
+        
+        with c_col_l:
+            st.markdown(f"#### 📈 {v_type} 성과 추이")
+            m_choice = st.radio("지표 선택:", ["CTR", "Cost", "Clicks", "CPM"], horizontal=True, key="metric_radio")
+            
+            # [수정] 데이터가 1개일 때 라인 차트 오류 방지를 위해 markers=True 유지 및 예외 처리
+            fig_line = px.line(plot_df, x="날짜", y=m_choice, color="소재명", symbol="매체",
+                               markers=True, template="plotly_white", height=450)
+            st.plotly_chart(fig_line, use_container_width=True)
 
-    with c_col_r:
-        st.markdown("#### 📊 소재별 비용 비중")
-        fig_pie = px.pie(plot_df, values='Cost', names='소재명', hole=0.5, 
-                         template="plotly_white", height=450)
-        st.plotly_chart(fig_pie, use_container_width=True)
+        with c_col_r:
+            st.markdown("#### 📊 소재별 비용 비중")
+            fig_pie = px.pie(plot_df, values='Cost', names='소재명', hole=0.5, 
+                             template="plotly_white", height=450)
+            st.plotly_chart(fig_pie, use_container_width=True)
+    else:
+        st.warning("선택한 필터에 해당하는 데이터가 없습니다.")
 
-    # --- 전체 데이터 표 (요청하신 열 순서) ---
+    # --- 상세 데이터 표 ---
     st.divider()
     st.subheader("📝 상세 데이터 내역")
-    # 순서: 날짜, 매체, 소재명, imp, click, ctr, cpc, cpm, cost (유형 추가)
-    display_df = df[['날짜', '매체', '소재명', '유형', 'Imps', 'Clicks', 'CTR', 'CPC', 'CPM', 'Cost']]
+    # [수정] 데이터 표 가독성을 위해 날짜 포맷 적용 및 열 재정렬
+    display_df = df[['날짜', '매체', '소재명', '유형', 'Imps', 'Clicks', 'CTR', 'CPC', 'CPM', 'Cost']].copy()
     display_df['날짜'] = display_df['날짜'].dt.strftime('%Y-%m-%d')
     
     st.dataframe(display_df, use_container_width=True)
