@@ -4,7 +4,7 @@ import plotly.express as px
 from datetime import datetime
 
 # 1. 페이지 설정
-st.set_page_config(page_title="AE 퍼포먼스 대시보드", layout="wide")
+st.set_page_config(page_title="매체 성과 대시보드", layout="wide")
 
 # 스타일 설정
 st.markdown("""
@@ -27,7 +27,7 @@ with st.sidebar:
     
     # 유형 및 매체 선택
     c_type = st.radio("소재 유형", ["배너(DA)", "영상(Video)"], horizontal=True)
-    m_name = st.selectbox("매체", ["네이버", "카카오", "구글", "메타", "유튜브", "기타"])
+    m_name = st.selectbox("매체", ["네이버", "카카오", "구글", "메타", "유튜브", "네트워크매체", "인벤", "루리웹", "디시인사이드"])
     
     # 소재명 입력 (기본값 제공 및 직접 입력 가능)
     st.divider()
