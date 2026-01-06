@@ -10,12 +10,10 @@ st.title("🎯 소재별 통합 성과 대시보드")
 
 # --- 데이터 처리 유틸리티 ---
 def clean_and_calculate(df):
-    if df.empty: 
-        return df
-    
+    if df.empty: return df
     new_df = df.copy()
 
-    # 1. 날짜 처리 (에러 방지를 위해 문자열 형식으로 유지)
+    # 날짜 보정: 일단 문자열로 모두 변환하여 에러 방지 [cite: 2]
     def fix_date(x):
         if pd.isna(x) or x == "": return "2025-01-01"
         s = str(x).replace("-", "").replace(".", "").strip()
@@ -25,12 +23,12 @@ def clean_and_calculate(df):
 
     new_df['날짜'] = new_df['날짜'].apply(fix_date)
     
-    # 2. 수치형 변환 및 지표 계산 (정수 및 소수점 강제 지정)
+    # 수치형 변환 [cite: 2]
     for col in ['노출수', '클릭수', '비용']:
         new_df[col] = pd.to_numeric(new_df[col], errors='coerce').fillna(0).astype(int)
 
-    # CTR, CPC, CPM 계산 (분모가 0인 경우 처리) [cite: 2, 3]
-    new_df['CTR(%)'] = (new_df['클릭수'] / new_df['노출수'] * 100).round(2).fillna(0)
+    # 지표 계산 [cite: 2, 3]
+    new_df['CTR(%)'] = (new_df['클릭수'] / new_df['노출수'] * 100).round(2).fillna(0.0)
     new_df['CPC'] = (new_df['비용'] / new_df['클릭수']).replace([float('inf')], 0).round(0).fillna(0).astype(int)
     new_df['CPM'] = (new_df['비용'] / new_df['노출수'] * 1000).round(0).fillna(0).astype(int)
     
@@ -43,12 +41,12 @@ if 'master_v5' not in st.session_state:
          "노출수": 1000, "클릭수": 10, "비용": 100000}
     ])
 
-# --- 행 추가 기능 ---
+# --- 행 추가 도구 ---
 st.subheader("📝 데이터 입력 시트")
 if st.button("➕ 7일치 행 추가"):
     try:
-        last_date_val = st.session_state.master_v5.iloc[-1]['날짜']
-        base_date = datetime.strptime(last_date_val, "%Y-%m-%d")
+        last_date_str = str(st.session_state.master_v5.iloc[-1]['날짜'])
+        base_date = pd.to_datetime(last_date_str)
     except:
         base_date = datetime.now()
 
@@ -61,11 +59,14 @@ if st.button("➕ 7일치 행 추가"):
     st.session_state.master_v5 = pd.concat([st.session_state.master_v5, pd.DataFrame(new_rows)], ignore_index=True)
     st.rerun()
 
-# --- 메인 데이터 에디터 ---
-# 지표가 계산된 데이터 생성 
+# --- [중요] 에러 해결 포인트: 데이터 에디터 전달용 데이터 가공 ---
+# display_df를 만들 때 타입을 완전히 고정합니다.
 display_df = clean_and_calculate(st.session_state.master_v5)
 
-# 데이터 에디터 실행
+# Streamlit 에디터의 타입 충돌을 막기 위해 강제 형변환 
+display_df['날짜'] = display_df['날짜'].astype(str)
+display_df['CTR(%)'] = display_df['CTR(%)'].astype(float)
+
 edited_df = st.data_editor(
     display_df,
     num_rows="dynamic",
@@ -78,38 +79,30 @@ edited_df = st.data_editor(
         "노출수": st.column_config.NumberColumn("노출수", format="%d"),
         "클릭수": st.column_config.NumberColumn("클릭수", format="%d"),
         "비용": st.column_config.NumberColumn("비용", format="₩%d"),
-        "CTR(%)": st.column_config.NumberColumn("CTR(%)", disabled=True), # 자동 계산 항목 수정 불가 [cite: 6]
-        "CPC": st.column_config.NumberColumn("CPC", disabled=True),
-        "CPM": st.column_config.NumberColumn("CPM", disabled=True)
+        "CTR(%)": st.column_config.NumberColumn("CTR(%)", disabled=True, format="%.2f%%"),
+        "CPC": st.column_config.NumberColumn("CPC", disabled=True, format="₩%d"),
+        "CPM": st.column_config.NumberColumn("CPM", disabled=True, format="₩%d")
     }
 )
 
-# 데이터 확정 버튼
 if st.button("🚀 분석 데이터로 확정 및 차트 갱신", use_container_width=True):
     save_cols = ["날짜", "유형", "매체", "상품명", "소재명", "노출수", "클릭수", "비용"]
     st.session_state.master_v5 = edited_df[save_cols].copy()
     st.success("데이터가 반영되었습니다!")
     st.rerun()
 
-# --- 시각화 섹션 (final_df 선언 위치 조정) ---
-st.divider()
-final_df = clean_and_calculate(st.session_state.master_v5) # 변수 선언을 사용 지점보다 위로 배치 
+# --- 시각화 섹션 ---
+final_df = clean_and_calculate(st.session_state.master_v5)
+final_df['날짜'] = pd.to_datetime(final_df['날짜']) # 시각화 시에는 다시 날짜형으로 [cite: 7]
 
 if not final_df.empty:
-    # KPI 요약 지표 표시 
+    st.divider()
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("총 비용", f"₩{int(final_df['비용'].sum()):,}")
     k2.metric("평균 CTR", f"{final_df['CTR(%)'].mean():.2f}%")
     k3.metric("평균 CPC", f"₩{int(final_df['CPC'].mean()):,}")
     k4.metric("평균 CPM", f"₩{int(final_df['CPM'].mean()):,}")
 
-    # 차트 시각화 [cite: 8]
-    c_l, c_r = st.columns([2, 1])
-    with c_l:
-        m_choice = st.radio("지표 선택", ["CTR(%)", "비용", "클릭수", "CPM"], horizontal=True)
-        fig = px.line(final_df.sort_values('날짜'), x="날짜", y=m_choice, color="소재명", markers=True)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with c_r:
-        fig_pie = px.pie(final_df, values='비용', names='소재명', hole=0.4)
-        st.plotly_chart(fig_pie, use_container_width=True)
+    m_choice = st.radio("지표 선택", ["CTR(%)", "비용", "클릭수", "CPM"], horizontal=True)
+    fig = px.line(final_df.sort_values('날짜'), x="날짜", y=m_choice, color="소재명", markers=True)
+    st.plotly_chart(fig, use_container_width=True)
