@@ -4,15 +4,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 
 # 1. 페이지 설정
-st.set_page_config(page_title="AE 통합 성과 대시보드 PRO", layout="wide")
-
-st.markdown("""
-    <style>
-    .main { background-color: #f8f9fa; }
-    [data-testid="stMetricValue"] { font-size: 18px; color: #1f77b4; font-weight: bold; }
-    .stButton>button { border-radius: 8px; font-weight: bold; height: 3em; }
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(page_title="성과 대시보드 PRO", layout="wide")
 
 st.title("🎯 소재별 통합 성과 대시보드")
 
@@ -20,54 +12,58 @@ st.title("🎯 소재별 통합 성과 대시보드")
 def clean_and_calculate(df):
     if df.empty: return df
     new_df = df.copy()
-    
-    # 1. 날짜 보정 (20251201 -> 2025-12-01)
+
+    # 1. 날짜 보정 함수 [cite: 2]
     def fix_date(x):
         if pd.isna(x) or x == "": return None
         s = str(x).replace("-", "").replace(".", "").strip()
         if len(s) == 8: return f"{s[:4]}-{s[4:6]}-{s[6:]}"
-        elif len(s) == 4: return f"2025-{s[:2]}-{s[2:]}" # 1201 입력 시 2025년으로 가정
-        return x
+        elif len(s) == 4: return f"2025-{s[:2]}-{s[2:]}"
+        return s
 
     new_df['날짜'] = new_df['날짜'].apply(fix_date)
     new_df['날짜'] = pd.to_datetime(new_df['날짜'], errors='coerce')
-    
-    # 2. 수치형 변환 및 지표 계산
+
+    # 2. 수치형 변환 및 지표 계산 [cite: 3]
     for col in ['노출수', '클릭수', '비용']:
         new_df[col] = pd.to_numeric(new_df[col], errors='coerce').fillna(0)
-    
+
     new_df['CTR(%)'] = (new_df['클릭수'] / new_df['노출수'] * 100).round(2).fillna(0)
     new_df['CPC'] = (new_df['비용'] / new_df['클릭수']).replace([float('inf')], 0).round(0).fillna(0)
     new_df['CPM'] = (new_df['비용'] / new_df['노출수'] * 1000).round(0).fillna(0)
     
     return new_df
 
-# --- 데이터 저장소 (캐시 방지 위해 v5 사용) ---
+# --- 데이터 저장소 초기화 ---
 if 'master_v5' not in st.session_state:
     st.session_state.master_v5 = pd.DataFrame([
-        {"날짜": "20251201", "유형": "배너(DA)", "매체": "네이버", "상품명": "GFA", "소재명": "소재 A", "노출수": 1000, "클릭수": 10, "비용": 100000}
+        {"날짜": "2025-12-01", "유형": "배너(DA)", "매체": "네이버", "상품명": "GFA", "소재명": "소재 A", 
+         "노출수": 1000, "클릭수": 10, "비용": 100000}
     ])
 
-# --- 편의 기능: 행 추가 도구 ---
+# --- 행 추가 도구 ---
 st.subheader("📝 데이터 입력 시트")
 c1, c2 = st.columns([1, 4])
+
 with c1:
     if st.button("➕ 7일치 행 추가"):
-        last_date_str = str(st.session_state.master_v5.iloc[-1]['날짜']).replace("-", "")
+        # 마지막 날짜 안전하게 가져오기 
         try:
-            base_date = datetime.strptime(last_date_str, "%Y%m%d")
+            last_date = pd.to_datetime(st.session_state.master_v5.iloc[-1]['날짜'])
+            if pd.isna(last_date): last_date = datetime.now()
         except:
-            base_date = datetime.now()
-        
+            last_date = datetime.now()
+            
         new_rows = []
         for i in range(1, 8):
-            new_date = (base_date + timedelta(days=i)).strftime("%Y%m%d")
+            new_date = (last_date + timedelta(days=i)).strftime("%Y-%m-%d")
             new_rows.append({"날짜": new_date, "유형": "배너(DA)", "매체": "네이버", "상품명": "", "소재명": "", "노출수": 0, "클릭수": 0, "비용": 0})
+        
         st.session_state.master_v5 = pd.concat([st.session_state.master_v5, pd.DataFrame(new_rows)], ignore_index=True)
         st.rerun()
 
 # --- 메인 시트 (st.data_editor) ---
-# 실시간으로 계산된 지표를 포함해서 보여줌
+# 에디터에는 계산된 지표를 포함하여 표시 
 display_df = clean_and_calculate(st.session_state.master_v5)
 
 edited_df = st.data_editor(
@@ -76,7 +72,7 @@ edited_df = st.data_editor(
     use_container_width=True,
     key="editor_v5",
     column_config={
-        "날짜": st.column_config.TextColumn("날짜 (예: 20251201)", help="8자리 숫자를 입력하세요."),
+        "날짜": st.column_config.TextColumn("날짜", help="YYYY-MM-DD 또는 8자리 숫자"),
         "유형": st.column_config.SelectboxColumn("유형", options=["배너(DA)", "영상(Video)"]),
         "매체": st.column_config.SelectboxColumn("매체", options=["네이버", "카카오", "구글", "메타", "유튜브", "인벤", "루리웹"]),
         "노출수": st.column_config.NumberColumn("노출수", format="%d"),
@@ -89,8 +85,13 @@ edited_df = st.data_editor(
 )
 
 if st.button("🚀 분석 데이터로 확정 및 차트 갱신", use_container_width=True):
-    # 계산된 컬럼 제외하고 원본 데이터만 저장
-    st.session_state.master_v5 = edited_df[["날짜", "유형", "매체", "상품명", "소재명", "노출수", "클릭수", "비용"]]
+    # 계산된 컬럼 제외하고 원본 데이터 성격의 컬럼만 저장 [cite: 6]
+    save_cols = ["날짜", "유형", "매체", "상품명", "소재명", "노출수", "클릭수", "비용"]
+    # 데이터 에디터에서 날짜가 Timestamp로 변환되어 있을 수 있으므로 문자열화
+    temp_df = edited_df[save_cols].copy()
+    temp_df['날짜'] = temp_df['날짜'].dt.strftime('%Y-%m-%d') if pd.api.types.is_datetime64_any_dtype(temp_df['날짜']) else temp_df['날짜']
+    
+    st.session_state.master_v5 = temp_df
     st.success("데이터가 성공적으로 반영되었습니다!")
     st.rerun()
 
@@ -99,7 +100,8 @@ final_df = clean_and_calculate(st.session_state.master_v5)
 
 if not final_df.empty and final_df['날짜'].notnull().any():
     st.divider()
-    # (이하 KPI 및 차트 로직은 동일하게 유지)
+    
+    # KPI 지표 
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("총 비용", f"₩{int(final_df['비용'].sum()):,}")
     k2.metric("평균 CTR", f"{final_df['CTR(%)'].mean():.2f}%")
@@ -107,10 +109,13 @@ if not final_df.empty and final_df['날짜'].notnull().any():
     k4.metric("평균 CPM", f"₩{int(final_df['CPM'].mean()):,}")
 
     c_l, c_r = st.columns([2, 1])
+    
     with c_l:
         m_choice = st.radio("지표 선택", ["CTR(%)", "비용", "클릭수", "CPM"], horizontal=True)
+        # 날짜순 정렬 후 시각화 [cite: 8]
         fig = px.line(final_df.sort_values('날짜'), x="날짜", y=m_choice, color="소재명", markers=True, template="plotly_white")
         st.plotly_chart(fig, use_container_width=True)
+
     with c_r:
         fig_pie = px.pie(final_df, values='비용', names='소재명', hole=0.4)
         st.plotly_chart(fig_pie, use_container_width=True)
