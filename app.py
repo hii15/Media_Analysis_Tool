@@ -64,9 +64,10 @@ def process_data(df, auto_date):
         processed_chunks = []
         for media, group in df.groupby('매체'):
             group = group.reset_index(drop=True)
-            first_date = pd.to_datetime(group.loc[0, '날짜'], errors='coerce')
-            if pd.notnull(first_date):
-                group['날짜'] = [first_date + timedelta(days=i) for i in range(len(group))]
+            if not group.empty:
+                first_date = pd.to_datetime(group.loc[0, '날짜'], errors='coerce')
+                if pd.notnull(first_date):
+                    group['날짜'] = [first_date + timedelta(days=i) for i in range(len(group))]
             processed_chunks.append(group)
         df = pd.concat(processed_chunks, ignore_index=True)
     else:
@@ -95,9 +96,17 @@ def run_analysis(df, item_a, item_b, iterations):
     
     return (samples_a > samples_b).mean(), samples_a, samples_b, future_sims
 
-# --- [데이터] 세션 관리 ---
+# --- [데이터] 세션 관리 및 입력 ---
 if 'db' not in st.session_state:
-    st.session_state.db = pd.DataFrame([{"날짜":datetime.now().date(),"매체":"네이버","상품명":"GFA","소재명":"S1","노출수":10000,"클릭수":100,"비용":500000}])
+    st.session_state.db = pd.DataFrame([{
+        "날짜": datetime.now().date(),
+        "매체": "네이버",
+        "상품명": "GFA",
+        "소재명": "S1",
+        "노출수": 10000,
+        "클릭수": 100,
+        "비용": 500000
+    }])
 
 media_list = ["네이버", "카카오", "구글", "메타", "유튜브", "SOOP", "디시인사이드", "인벤", "루리웹"]
 tabs = st.tabs(media_list)
@@ -114,13 +123,17 @@ for i, m in enumerate(media_list):
                 "매체": m, "상품명": "", "소재명": "", "노출수": 0, "클릭수": 0, "비용": 0
             }])
         
+        # [수정] 복사-붙여넣기 호환성을 높이기 위한 column_config 설정
         edited = st.data_editor(
             curr_df, 
             num_rows="dynamic", 
             use_container_width=True, 
             key=f"ed_{m}",
             column_config={
-                "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD", required=True)
+                "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD", required=True),
+                "비용": st.column_config.NumberColumn("비용", min_value=0, format="%d"),
+                "노출수": st.column_config.NumberColumn("노출수", min_value=0, format="%d"),
+                "클릭수": st.column_config.NumberColumn("클릭수", min_value=0, format="%d")
             }
         )
         all_data.append(edited)
@@ -131,25 +144,41 @@ if st.button("🚀 통합 분석 실행 및 데이터 저장", use_container_wid
     st.success("데이터가 저장되었습니다.")
     st.rerun()
 
-# --- [리포트] ---
+# --- [리포트] 시각화 분석 ---
 final_df = st.session_state.db
 if not final_df.empty and 'ID' in final_df.columns and len(final_df['ID'].unique()) >= 2:
     st.divider()
     p_list = sorted(final_df['ID'].unique())
     col_sel1, col_sel2 = st.columns(2)
     with col_sel1:
-        item_a = st.selectbox("비교 상품 A", p_list, index=0)
+        item_a = st.selectbox("비교 상품 A (기준)", p_list, index=0)
     with col_sel2:
-        item_b = st.selectbox("비교 상품 B", p_list, index=1)
+        item_b = st.selectbox("비교 상품 B (대상)", p_list, index=1)
         
-    prob, s_a, s_b, f_sims = run_analysis(final_df, item_a, item_b, n_iterations)
-    
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        st.metric(f"{item_b} 승리 확률", f"{prob*100:.1f}%")
-    with c2:
-        fig = go.Figure()
-        fig.add_trace(go.Histogram(x=s_a, name=item_a, opacity=0.6))
-        fig.add_trace(go.Histogram(x=s_b, name=item_b, opacity=0.6))
-        fig.update_layout(barmode='overlay', title="CTR 사후 확률 분포 비교")
-        st.plotly_chart(fig, use_container_width=True)
+    try:
+        prob, s_a, s_b, f_sims = run_analysis(final_df, item_a, item_b, n_iterations)
+        
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            st.metric(f"{item_b} 승리 확률", f"{prob*100:.1f}%")
+            st.write(f"**{item_a} 대비 {item_b} 성과**")
+            diff = (s_b.mean() - s_a.mean()) / s_a.mean() * 100
+            st.write(f"기대 CTR 차이: {diff:+.2f}%")
+            
+        with c2:
+            fig = go.Figure()
+            fig.add_trace(go.Histogram(x=s_a, name=item_a, opacity=0.6, marker_color='#636EFA'))
+            fig.add_trace(go.Histogram(x=s_b, name=item_b, opacity=0.6, marker_color='#EF553B'))
+            fig.update_layout(
+                barmode='overlay', 
+                title="CTR 사후 확률 분포 비교",
+                xaxis_title="CTR (%)",
+                yaxis_title="빈도",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+        st.info("💡 분포가 겹치지 않을수록 두 상품 간의 성과 차이가 통계적으로 확실함을 의미합니다.")
+        
+    except Exception as e:
+        st.error(f"분석 중 오류가 발생했습니다: {e}")
