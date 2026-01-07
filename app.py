@@ -33,8 +33,11 @@ with st.sidebar:
     # 2. 업로드 기능
     uploaded_file = st.file_uploader("📂 저장된 CSV 파일 불러오기", type=["csv"])
     if uploaded_file is not None:
-        try:
-            input_df = pd.read_csv(uploaded_file)
+    try:
+        input_df = pd.read_csv(uploaded_file)
+        # 불러올 때 날짜 형식을 맞춰줌
+        input_df['날짜'] = pd.to_datetime(input_df['날짜']).dt.date
+        # ... (이후 로직 동일)
             required_cols = ["날짜", "매체", "상품명", "소재명", "노출수", "클릭수", "비용"]
             if all(col in input_df.columns for col in required_cols):
                 if st.button("📥 데이터 덮어쓰기 적용"):
@@ -107,18 +110,33 @@ all_data = []
 for i, m in enumerate(media_list):
     with tabs[i]:
         curr_df = st.session_state.db[st.session_state.db['매체'] == m].copy()
-        if curr_df.empty:
-            curr_df = pd.DataFrame([{"날짜":datetime.now().strftime("%Y-%m-%d"),"매체":m,"상품명":"","소재명":"","노출수":0,"클릭수":0,"비용":0}])
         
-        curr_df['날짜'] = curr_df['날짜'].astype(str)
-        # 달력 팝업을 띄워주는 DateColumn 설정 추가
+        # [수정] 날짜를 문자열이 아닌 datetime 객체로 변환 (DateColumn 호환용)
+        curr_df['날짜'] = pd.to_datetime(curr_df['날짜'], errors='coerce')
+        
+        if curr_df.empty:
+            curr_df = pd.DataFrame([{
+                "날짜": datetime.now().date(), # .date()를 붙여 날짜만 전달
+                "매체": m,
+                "상품명": "",
+                "소재명": "",
+                "노출수": 0,
+                "클릭수": 0,
+                "비용": 0
+            }])
+        
+        # [수정] 이제 DateColumn 설정이 정상 작동합니다.
         edited = st.data_editor(
             curr_df, 
             num_rows="dynamic", 
             use_container_width=True, 
             key=f"ed_{m}",
             column_config={
-                "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD")
+                "날짜": st.column_config.DateColumn(
+                    "날짜", 
+                    format="YYYY-MM-DD",
+                    required=True # 날짜 필수 입력 설정
+                )
             }
         )
         all_data.append(edited)
