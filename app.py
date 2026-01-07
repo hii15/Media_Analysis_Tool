@@ -9,12 +9,12 @@ import re
 # 1. 페이지 설정
 st.set_page_config(page_title="Marketing Intelligence Tool", layout="wide")
 
-# --- [핵심 엔진: 데이터 정제 및 날짜 자동화] ---
+# --- [핵심 엔진: 데이터 정제] ---
 def process_marketing_data(df_list, auto_date):
     if not df_list: return pd.DataFrame()
     combined = pd.concat(df_list, ignore_index=True)
     
-    # 1. 기초 정제: 상품명이 없는 행은 과감히 삭제
+    # 기초 정제: 상품명이 없으면 제외
     combined = combined[combined['상품명'].astype(str).str.strip() != ""]
     if combined.empty: return combined
     
@@ -22,10 +22,9 @@ def process_marketing_data(df_list, auto_date):
     for _, group in combined.groupby(['매체', '상품명', '소재명']):
         group = group.reset_index(drop=True)
         
-        # 2. 날짜 유연 정제 (20251113, 2025.11.13, 2025-11-13 모두 대응)
+        # 날짜 자동 생성 (20251113 등 모든 형식 대응)
         if auto_date and not group.empty:
             raw_date = str(group.loc[0, '날짜']).strip()
-            # 숫자로만 된 날짜 (예: 20251113) 처리
             if len(raw_date) == 8 and raw_date.isdigit():
                 raw_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}"
             
@@ -33,20 +32,17 @@ def process_marketing_data(df_list, auto_date):
             start_dt = pd.to_datetime(clean_date, errors='coerce')
             
             if pd.notnull(start_dt):
-                group['날짜'] = [start_dt + timedelta(days=i) for i in range(len(group))]
-            else:
-                group['날짜'] = datetime.now().date()
+                group['날짜'] = [(start_dt + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(len(group))]
         
         processed_chunks.append(group)
     
     df = pd.concat(processed_chunks, ignore_index=True)
     
-    # 3. 숫자 정밀 정제 (콤마, ₩, 원화, 소수점 등 제거)
+    # 숫자 정제: 콤마, 공백, 특수문자 싹 제거 후 숫자로 변환
     for col in ['노출수', '클릭수', '비용']:
         df[col] = df[col].astype(str).apply(lambda x: re.sub(r'[^\d]', '', x))
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
     
-    # 4. 논리적 오류 보정 및 CTR 계산
     df['클릭수'] = df[['노출수', '클릭수']].min(axis=1)
     df['CTR(%)'] = np.where(df['노출수'] > 0, (df['클릭수'] / df['노출수'] * 100), 0.0)
     df['ID'] = "[" + df['매체'].astype(str) + "] " + df['상품명'].astype(str) + "_" + df['소재명'].astype(str)
@@ -56,28 +52,24 @@ def process_marketing_data(df_list, auto_date):
 # --- [사이드바] ---
 with st.sidebar:
     st.header("⚙️ 분석 설정")
-    auto_date_mode = st.checkbox("📅 소재별 날짜 자동 생성", value=True, help="첫 줄의 날짜를 기준으로 다음 행들의 날짜를 하루씩 자동 증가시킵니다.")
+    auto_date_mode = st.checkbox("📅 소재별 날짜 자동 생성", value=True)
     n_sim = st.select_slider("🎲 시뮬레이션 정밀도", options=[1000, 5000, 10000], value=5000)
 
 st.title("🎯 통합 마케팅 성과 분석 & 시뮬레이터")
 
-# --- [데이터 관리] ---
-media_list = ["네이버", "카카오", "구글", "메타", "유튜브", "SOOP", "디시인사이드", "인벤", "루리웹"]
-
-# 에러 방지를 위한 세션 데이터 강제 초기화 함수
-def clear_db():
-    st.session_state.db = pd.DataFrame()
-    st.rerun()
-
+# --- [데이터 관리 및 초기화] ---
 if 'db' not in st.session_state:
     st.session_state.db = pd.DataFrame()
 
-# --- [데이터 입력 섹션] ---
+media_list = ["네이버", "카카오", "구글", "메타", "유튜브", "SOOP", "디시인사이드", "인벤", "루리웹"]
+
+# --- [입력 섹션] ---
 tabs = st.tabs(media_list)
 all_editor_data = []
 
 for i, m in enumerate(media_list):
     with tabs[i]:
+        # 현재 데이터 필터링
         curr = pd.DataFrame()
         if not st.session_state.db.empty:
             curr = st.session_state.db[st.session_state.db['매체'] == m].copy()
@@ -85,74 +77,70 @@ for i, m in enumerate(media_list):
         if curr.empty:
             curr = pd.DataFrame([{"날짜": datetime.now().strftime("%Y-%m-%d"), "매체": m, "상품명": "", "소재명": "", "노출수": "0", "클릭수": "0", "비용": "0"}])
         
-        # [수정] column_config를 명확하게 지정하여 데이터 타입 충돌 방지
+        # ⚠️ 핵심: 모든 컬럼의 데이터 타입을 '문자열'로 취급하여 붙여넣기 충돌 방지
+        curr = curr.astype(str) 
+
         edited = st.data_editor(
             curr, 
             num_rows="dynamic", 
             use_container_width=True, 
-            key=f"editor_v8_{m}_{len(st.session_state.db)}", # 키를 동적으로 생성하여 캐시 에러 방지
+            key=f"editor_final_{m}", # 키 고정 (충돌 최소화)
             column_config={
-                "날짜": st.column_config.TextColumn("날짜", help="20251113 또는 2025-11-13 형식"),
+                "날짜": st.column_config.TextColumn("날짜"),
                 "매체": st.column_config.TextColumn("매체", disabled=True),
                 "상품명": st.column_config.TextColumn("상품명"),
                 "소재명": st.column_config.TextColumn("소재명"),
                 "노출수": st.column_config.TextColumn("노출수"),
                 "클릭수": st.column_config.TextColumn("클릭수"),
-                "비용": st.column_config.TextColumn("비용(₩)")
+                "비용": st.column_config.TextColumn("비용")
             }
         )
         all_editor_data.append(edited)
 
+# --- [실행 버튼] ---
 col1, col2 = st.columns([4, 1])
 with col1:
-    btn_update = st.button("🚀 데이터 업데이트 및 분석 실행", use_container_width=True)
+    if st.button("🚀 데이터 업데이트 및 분석 실행", use_container_width=True):
+        try:
+            processed = process_marketing_data(all_editor_data, auto_date_mode)
+            if not processed.empty:
+                st.session_state.db = processed
+                st.success("데이터가 성공적으로 업데이트되었습니다!")
+                st.rerun()
+            else:
+                st.warning("분석할 유효한 데이터가 없습니다.")
+        except Exception as e:
+            st.error(f"오류 발생: {e}")
+
 with col2:
     if st.button("♻️ 전체 초기화", use_container_width=True):
-        clear_db()
-
-# --- [분석 및 리포트] ---
-if btn_update:
-    try:
-        st.session_state.db = process_marketing_data(all_editor_data, auto_date_mode)
-        st.success("데이터 업데이트 성공!")
+        st.session_state.db = pd.DataFrame()
         st.rerun()
-    except Exception as e:
-        st.error(f"데이터 처리 중 오류가 발생했습니다: {e}")
 
+# --- [결과 리포트] ---
 df = st.session_state.db
 if not df.empty and 'ID' in df.columns:
-    p_list = sorted(df['ID'].unique())
-    
-    if len(p_list) >= 2:
+    ids = sorted(df['ID'].unique())
+    if len(ids) >= 2:
         st.divider()
-        st.subheader("📊 소재별 성과 비교 분석")
-        
         c1, c2 = st.columns(2)
-        with c1: item_a = st.selectbox("기준 소재 (A)", p_list, index=0)
-        with c2: item_b = st.selectbox("비교 소재 (B)", p_list, index=1)
+        with c1: item_a = st.selectbox("기준 소재 (A)", ids, index=0)
+        with c2: item_b = st.selectbox("비교 소재 (B)", ids, index=1)
 
         res = df.groupby('ID').agg({'노출수':'sum', '클릭수':'sum'})
         a, b = res.loc[item_a], res.loc[item_b]
 
-        # 시뮬레이션
+        # 베이지안 시뮬레이션
         s_a = np.random.beta(a['클릭수']+1, max(1, a['노출수']-a['클릭수']+1), n_sim)
         s_b = np.random.beta(b['클릭수']+1, max(1, b['노출수']-b['클릭수']+1), n_sim)
-        
         prob_b_win = (s_b > s_a).mean()
-        lift = (s_b.mean() - s_a.mean()) / (s_a.mean() if s_a.mean() > 0 else 1e-9) * 100
-
-        m1, m2, m3 = st.columns(3)
+        
+        st.subheader("📊 분석 결과")
+        m1, m2 = st.columns(2)
         m1.metric(f"{item_b} 승리 확률", f"{prob_b_win*100:.1f}%")
-        m2.metric("기대 CTR 개선율", f"{lift:.2f}%")
-        m3.metric("신뢰 수준", "확실함" if prob_b_win > 0.95 or prob_b_win < 0.05 else "데이터 더 필요")
+        m2.metric("성과 차이", "확실함" if prob_b_win > 0.95 or prob_b_win < 0.05 else "데이터 부족")
 
-        # 분포 그래프
         fig = go.Figure()
-        fig.add_trace(go.Histogram(x=s_a, name=item_a, opacity=0.6, marker_color='#636EFA'))
-        fig.add_trace(go.Histogram(x=s_b, name=item_b, opacity=0.6, marker_color='#EF553B'))
-        fig.update_layout(barmode='overlay', title="CTR 성과 사후 분포", xaxis_title="추정 CTR", yaxis_title="빈도")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("💡 서로 다른 소재 데이터가 2개 이상 필요합니다.")
-else:
-    st.info("👋 위 테이블에 데이터를 입력하고 '업데이트' 버튼을 눌러주세요.")
+        fig.add_trace(go.Histogram(x=s_a, name=item_a, opacity=0.6))
+        fig.add_trace(go.Histogram(x=s_b, name=item_b, opacity=0.6))
+        fig.update_layout(barmode='overlay', title="CTR 사후 분포 비교
