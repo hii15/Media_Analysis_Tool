@@ -13,11 +13,13 @@ st.set_page_config(page_title="In-house Marketing BI", layout="wide")
 with st.sidebar:
     st.header("💾 데이터 관리 (Save/Load)")
     
+    # 날짜 자동 생성 모드 체크박스
     auto_date_mode = st.checkbox("📅 날짜 자동 생성 모드", value=False, 
                                  help="체크하면 첫 줄 날짜를 기준으로 아래 행들의 날짜를 하루씩 자동으로 채웁니다.")
     
     st.divider()
     
+    # 1. 다운로드 기능
     if 'db' in st.session_state and not st.session_state.db.empty:
         csv = st.session_state.db.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
@@ -29,10 +31,12 @@ with st.sidebar:
     
     st.divider()
     
+    # 2. 업로드 기능 (Indentation Error 해결 완료)
     uploaded_file = st.file_uploader("📂 저장된 CSV 파일 불러오기", type=["csv"])
     if uploaded_file is not None:
         try:
             input_df = pd.read_csv(uploaded_file)
+            # 날짜 형식 보정 (문자열 -> 날짜 객체)
             input_df['날짜'] = pd.to_datetime(input_df['날짜'], errors='coerce').dt.date
             
             required_cols = ["날짜", "매체", "상품명", "소재명", "노출수", "클릭수", "비용"]
@@ -52,30 +56,30 @@ with st.sidebar:
 
 st.title("🎯 데이터 기반 마케팅 분석툴")
 
-# --- [유틸리티] 데이터 처리 함수 (특수문자 제거 로직 강화) ---
+# --- [유틸리티] 데이터 처리 함수 (특수문자 제거 로직) ---
 def process_data(df, auto_date):
     if df.empty: return df
     df = df.copy()
     
-    # 1. 날짜 처리
+    # 1. 날짜 처리 로직
     if auto_date:
         processed_chunks = []
         for media, group in df.groupby('매체'):
             group = group.reset_index(drop=True)
             if not group.empty:
-                first_date = pd.to_datetime(group.loc[0, '날짜'], errors='coerce')
-                if pd.notnull(first_date):
-                    group['날짜'] = [first_date + timedelta(days=i) for i in range(len(group))]
+                first_row_date = pd.to_datetime(group.loc[0, '날짜'], errors='coerce')
+                if pd.notnull(first_row_date):
+                    group['날짜'] = [first_row_date + timedelta(days=i) for i in range(len(group))]
             processed_chunks.append(group)
         df = pd.concat(processed_chunks, ignore_index=True)
     else:
         df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
-        
+    
     df = df.dropna(subset=['날짜'])
     
-    # 2. 수치 데이터 처리 (원화 기호, 콤마 제거)
+    # 2. 수치 데이터 클렌징 (₩, \, , 등 특수문자 제거)
     for col in ['노출수', '클릭수', '비용']:
-        # 숫자가 아닌 문자(₩, \, , 등)를 모두 제거하는 정규식 적용
+        # 텍스트에서 숫자와 소수점만 남기고 제거
         df[col] = df[col].astype(str).str.replace(r'[^\d.]', '', regex=True)
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
     
@@ -83,20 +87,26 @@ def process_data(df, auto_date):
     df['ID'] = "[" + df['매체'] + "] " + df['상품명']
     return df
 
-# --- [분석] 베이지안 로직 ---
+# --- [분석] 베이지안 연산 ---
 def run_analysis(df, item_a, item_b, iterations):
     res = df.groupby('ID').agg({'클릭수':'sum', '노출수':'sum'})
     a, b = res.loc[item_a], res.loc[item_b]
+    
     samples_a = np.random.beta(a['클릭수']+1, a['노출수']-a['클릭수']+1, iterations)
     samples_b = np.random.beta(b['클릭수']+1, b['노출수']-b['클릭수']+1, iterations)
+    
     target_ctr = df[df['ID'] == item_b]['CTR(%)']
     mu, sigma = target_ctr.mean(), target_ctr.std() if target_ctr.std() > 0 else target_ctr.mean()*0.1
     future_sims = np.maximum(0, np.random.normal(mu, sigma, (iterations, 7)))
+    
     return (samples_a > samples_b).mean(), samples_a, samples_b, future_sims
 
-# --- [데이터] 세션 관리 ---
+# --- [데이터] 세션 관리 및 입력 ---
 if 'db' not in st.session_state:
-    st.session_state.db = pd.DataFrame([{"날짜": datetime.now().date(), "매체": "네이버", "상품명": "GFA", "소재명": "S1", "노출수": 10000, "클릭수": 100, "비용": 500000}])
+    st.session_state.db = pd.DataFrame([{
+        "날짜": datetime.now().date(),
+        "매체": "네이버", "상품명": "GFA", "소재명": "S1", "노출수": 10000, "클릭수": 100, "비용": "500000"
+    }])
 
 media_list = ["네이버", "카카오", "구글", "메타", "유튜브", "SOOP", "디시인사이드", "인벤", "루리웹"]
 tabs = st.tabs(media_list)
@@ -108,9 +118,12 @@ for i, m in enumerate(media_list):
         curr_df['날짜'] = pd.to_datetime(curr_df['날짜'], errors='coerce')
         
         if curr_df.empty:
-            curr_df = pd.DataFrame([{"날짜": datetime.now().date(), "매체": m, "상품명": "", "소재명": "", "노출수": 0, "클릭수": 0, "비용": 0}])
+            curr_df = pd.DataFrame([{
+                "날짜": datetime.now().date(),
+                "매체": m, "상품명": "", "소재명": "", "노출수": 0, "클릭수": 0, "비용": ""
+            }])
         
-        # [중요] 컬럼 타입을 텍스트(Required for pasting symbols)와 숫자 병행 설정
+        # 엑셀 복사-붙여넣기 에러 방지를 위한 컬럼 설정
         edited = st.data_editor(
             curr_df, 
             num_rows="dynamic", 
@@ -118,8 +131,8 @@ for i, m in enumerate(media_list):
             key=f"ed_{m}",
             column_config={
                 "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD", required=True),
-                # 비용 컬럼을 일시적으로 텍스트로도 받을 수 있게 하여 붙여넣기 허용
-                "비용": st.column_config.TextColumn("비용 (₩)", help="원화 기호가 있어도 분석 실행 시 숫자로 자동 변환됩니다."),
+                # 비용을 TextColumn으로 설정하여 ₩ 기호가 포함된 복사-붙여넣기 허용
+                "비용": st.column_config.TextColumn("비용 (₩)", help="기호가 포함되어도 분석 시 자동 제거됩니다."),
                 "노출수": st.column_config.NumberColumn("노출수", format="%d"),
                 "클릭수": st.column_config.NumberColumn("클릭수", format="%d")
             }
@@ -128,26 +141,31 @@ for i, m in enumerate(media_list):
 
 if st.button("🚀 통합 분석 실행 및 데이터 저장", use_container_width=True):
     raw_combined = pd.concat(all_data, ignore_index=True)
+    # process_data 내부에서 ₩ 기호 등을 제거하고 수치화함
     st.session_state.db = process_data(raw_combined, auto_date_mode)
-    st.success("데이터가 성공적으로 처리되었습니다.")
+    st.success("데이터가 성공적으로 업데이트되었습니다.")
     st.rerun()
 
-# --- [리포트] ---
+# --- [리포트] 시각화 ---
 final_df = st.session_state.db
 if not final_df.empty and 'ID' in final_df.columns and len(final_df['ID'].unique()) >= 2:
     st.divider()
     p_list = sorted(final_df['ID'].unique())
-    item_a = st.selectbox("비교 상품 A (기준)", p_list, index=0)
-    item_b = st.selectbox("비교 상품 B (대상)", p_list, index=1)
-    
+    col_sel1, col_sel2 = st.columns(2)
+    with col_sel1:
+        item_a = st.selectbox("비교 상품 A (기준)", p_list, index=0)
+    with col_sel2:
+        item_b = st.selectbox("비교 상품 B (대상)", p_list, index=1)
+        
     prob, s_a, s_b, f_sims = run_analysis(final_df, item_a, item_b, n_iterations)
     
     c1, c2 = st.columns([1, 2])
     with c1:
         st.metric(f"{item_b} 승리 확률", f"{prob*100:.1f}%")
+        st.write("사후 확률 분포 차트가 우측에 생성되었습니다.")
     with c2:
         fig = go.Figure()
         fig.add_trace(go.Histogram(x=s_a, name=item_a, opacity=0.6))
         fig.add_trace(go.Histogram(x=s_b, name=item_b, opacity=0.6))
-        fig.update_layout(barmode='overlay', title="CTR 사후 확률 분포 비교")
+        fig.update_layout(barmode='overlay', title="CTR 성과 분포 비교")
         st.plotly_chart(fig, use_container_width=True)
