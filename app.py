@@ -33,11 +33,11 @@ with st.sidebar:
     # 2. 업로드 기능
     uploaded_file = st.file_uploader("📂 저장된 CSV 파일 불러오기", type=["csv"])
     if uploaded_file is not None:
-    try:
-        input_df = pd.read_csv(uploaded_file)
-        # 불러올 때 날짜 형식을 맞춰줌
-        input_df['날짜'] = pd.to_datetime(input_df['날짜']).dt.date
-        # ... (이후 로직 동일)
+        try:
+            input_df = pd.read_csv(uploaded_file)
+            # 날짜 형식 보정
+            input_df['날짜'] = pd.to_datetime(input_df['날짜'], errors='coerce').dt.date
+            
             required_cols = ["날짜", "매체", "상품명", "소재명", "노출수", "클릭수", "비용"]
             if all(col in input_df.columns for col in required_cols):
                 if st.button("📥 데이터 덮어쓰기 적용"):
@@ -55,17 +55,15 @@ with st.sidebar:
 
 st.title("🎯 데이터 기반 마케팅 분석툴")
 
-# --- [유틸리티] 데이터 처리 함수 (날짜 자동생성 로직 포함) ---
+# --- [유틸리티] 데이터 처리 함수 ---
 def process_data(df, auto_date):
     if df.empty: return df
     df = df.copy()
     
-    # 날짜 자동 생성 모드 활성화 시
     if auto_date:
         processed_chunks = []
         for media, group in df.groupby('매체'):
             group = group.reset_index(drop=True)
-            # 첫 번째 행의 날짜를 기준으로 시퀀스 생성
             first_date = pd.to_datetime(group.loc[0, '날짜'], errors='coerce')
             if pd.notnull(first_date):
                 group['날짜'] = [first_date + timedelta(days=i) for i in range(len(group))]
@@ -80,13 +78,11 @@ def process_data(df, auto_date):
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
     
     df['CTR(%)'] = (df['클릭수'] / df['노출수'] * 100).round(2).fillna(0.0)
-    # 매체 통합 비교를 위한 ID 생성
     df['ID'] = "[" + df['매체'] + "] " + df['상품명']
     return df
 
 # --- [분석] 베이지안 및 몬테카를로 로직 ---
 def run_analysis(df, item_a, item_b, iterations):
-    # ID 기준으로 데이터 필터링
     res = df.groupby('ID').agg({'클릭수':'sum', '노출수':'sum'})
     a, b = res.loc[item_a], res.loc[item_b]
     
@@ -99,9 +95,9 @@ def run_analysis(df, item_a, item_b, iterations):
     
     return (samples_a > samples_b).mean(), samples_a, samples_b, future_sims
 
-# --- [데이터] 세션 관리 및 입력 ---
+# --- [데이터] 세션 관리 ---
 if 'db' not in st.session_state:
-    st.session_state.db = pd.DataFrame([{"날짜":datetime.now().strftime("%Y-%m-%d"),"매체":"네이버","상품명":"GFA","소재명":"S1","노출수":10000,"클릭수":100,"비용":500000}])
+    st.session_state.db = pd.DataFrame([{"날짜":datetime.now().date(),"매체":"네이버","상품명":"GFA","소재명":"S1","노출수":10000,"클릭수":100,"비용":500000}])
 
 media_list = ["네이버", "카카오", "구글", "메타", "유튜브", "SOOP", "디시인사이드", "인벤", "루리웹"]
 tabs = st.tabs(media_list)
@@ -110,60 +106,44 @@ all_data = []
 for i, m in enumerate(media_list):
     with tabs[i]:
         curr_df = st.session_state.db[st.session_state.db['매체'] == m].copy()
-        
-        # [수정] 날짜를 문자열이 아닌 datetime 객체로 변환 (DateColumn 호환용)
         curr_df['날짜'] = pd.to_datetime(curr_df['날짜'], errors='coerce')
         
         if curr_df.empty:
             curr_df = pd.DataFrame([{
-                "날짜": datetime.now().date(), # .date()를 붙여 날짜만 전달
-                "매체": m,
-                "상품명": "",
-                "소재명": "",
-                "노출수": 0,
-                "클릭수": 0,
-                "비용": 0
+                "날짜": datetime.now().date(),
+                "매체": m, "상품명": "", "소재명": "", "노출수": 0, "클릭수": 0, "비용": 0
             }])
         
-        # [수정] 이제 DateColumn 설정이 정상 작동합니다.
         edited = st.data_editor(
             curr_df, 
             num_rows="dynamic", 
             use_container_width=True, 
             key=f"ed_{m}",
             column_config={
-                "날짜": st.column_config.DateColumn(
-                    "날짜", 
-                    format="YYYY-MM-DD",
-                    required=True # 날짜 필수 입력 설정
-                )
+                "날짜": st.column_config.DateColumn("날짜", format="YYYY-MM-DD", required=True)
             }
         )
         all_data.append(edited)
 
 if st.button("🚀 통합 분석 실행 및 데이터 저장", use_container_width=True):
     raw_combined = pd.concat(all_data, ignore_index=True)
-    # process_data 함수에 auto_date_mode 전달
     st.session_state.db = process_data(raw_combined, auto_date_mode)
-    st.success("데이터가 세션에 저장되고 날짜 로직이 적용되었습니다.")
+    st.success("데이터가 저장되었습니다.")
     st.rerun()
 
-# --- [리포트] 시각화 분석 ---
+# --- [리포트] ---
 final_df = st.session_state.db
-if not final_df.empty and len(final_df['ID'].unique()) >= 2:
+if not final_df.empty and 'ID' in final_df.columns and len(final_df['ID'].unique()) >= 2:
     st.divider()
-    
-    # 매체 통합 다중 선택 비교
     p_list = sorted(final_df['ID'].unique())
     col_sel1, col_sel2 = st.columns(2)
     with col_sel1:
-        item_a = st.selectbox("비교 상품 A (기준)", p_list, index=0)
+        item_a = st.selectbox("비교 상품 A", p_list, index=0)
     with col_sel2:
-        item_b = st.selectbox("비교 상품 B (대상)", p_list, index=1)
+        item_b = st.selectbox("비교 상품 B", p_list, index=1)
         
     prob, s_a, s_b, f_sims = run_analysis(final_df, item_a, item_b, n_iterations)
     
-    # 시각화 예시 (베이지안)
     c1, c2 = st.columns([1, 2])
     with c1:
         st.metric(f"{item_b} 승리 확률", f"{prob*100:.1f}%")
@@ -173,5 +153,3 @@ if not final_df.empty and len(final_df['ID'].unique()) >= 2:
         fig.add_trace(go.Histogram(x=s_b, name=item_b, opacity=0.6))
         fig.update_layout(barmode='overlay', title="CTR 사후 확률 분포 비교")
         st.plotly_chart(fig, use_container_width=True)
-
-    st.info("분석 리포트가 활성화되었습니다.")
