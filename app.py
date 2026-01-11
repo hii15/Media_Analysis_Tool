@@ -38,8 +38,10 @@ def clean_and_process(df):
     for col in ['노출수', '클릭수', '비용']:
         final_df[col] = pd.to_numeric(final_df[col].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0)
     
+    # 지표 계산 (CTR, CPC, CPM)
     final_df['CTR(%)'] = np.where(final_df['노출수'] > 0, (final_df['클릭수'] / final_df['노출수'] * 100), 0.0)
-    # 분석의 용이성을 위해 ID에 상품명과 소재명을 결합
+    final_df['CPC'] = np.where(final_df['클릭수'] > 0, (final_df['비용'] / final_df['클릭수']), 0.0)
+    final_df['CPM'] = np.where(final_df['노출수'] > 0, (final_df['비용'] / final_df['노출수'] * 1000), 0.0)
     final_df['ID'] = "[" + final_df['상품명'].astype(str) + "] " + final_df['소재명'].astype(str)
     
     return final_df.dropna(subset=['날짜']), None
@@ -55,7 +57,7 @@ def ml_forecast(data):
     return future_dates, forecast
 
 # --- [UI 메인] ---
-st.title("📊 마케팅 데이터 과학 통합 대시보드")
+st.title("📊 마케팅 데이터 통합 대시보드")
 
 uploaded_file = st.file_uploader("파일을 업로드하세요 (xlsx, csv)", type=['xlsx', 'csv'])
 
@@ -76,21 +78,15 @@ if uploaded_file:
     if all_dfs:
         full_df = pd.concat(all_dfs, ignore_index=True)
         ids = sorted(full_df['ID'].unique())
-
-        # 사이드바 또는 상단에서 공통 소재 선택 (상태 유지를 위해 고정)
-        st.sidebar.header("🎯 분석 대상 설정")
-        sel_a = st.sidebar.selectbox("기준 소재 (A)", ids, index=0, key="main_a")
-        sel_b = st.sidebar.selectbox("비교 소재 (B)", ids, index=min(1, len(ids)-1), key="main_b")
         
-        # 탭 구성 (요청하신 순서대로 배치)
         tab1, tab2, tab3, tab4 = st.tabs([
             "💎 상품별 요약 & 예산 가이드", 
-            "🔍 소재별 상세 비교", 
-            "⚖️ 베이지안 우열 진단", 
-            "📈 머신러닝 성과 예측"
+            "🔍 전체 소재 성과 리포트", 
+            "⚖️ 소재간 베이지안 진단", 
+            "📈 머신러닝 수명 예측"
         ])
 
-        # --- TAB 1: 상품별 요약 및 예산 최적화 ---
+        # --- TAB 1: 상품별 요약 ---
         with tab1:
             st.header("🏢 상품별 통합 성과")
             p_sum = full_df.groupby('상품명').agg({'노출수':'sum', '클릭수':'sum', '비용':'sum', 'CTR(%)':'mean'}).reset_index()
@@ -101,26 +97,31 @@ if uploaded_file:
                 p_sum['효율성점수'] = (p_sum['CTR(%)'] / (p_sum['비용'] / p_sum['노출수'])).fillna(0)
                 st.plotly_chart(px.bar(p_sum, x='상품명', y='효율성점수', title="상품별 예산 효율성 (높을수록 증액 권장)"), use_container_width=True)
 
-        # --- TAB 2: 소재별 상세 비교 (신규 추가) ---
+        # --- TAB 2: 전체 소재 성과 리포트 (통합 뷰) ---
         with tab2:
-            st.header("🔍 선택 소재 지표 대조")
-            compare_df = full_df[full_df['ID'].isin([sel_a, sel_b])]
-            summary = compare_df.groupby(['ID', '매체']).agg({
-                '노출수': 'sum', '클릭수': 'sum', '비용': 'sum', 'CTR(%)': 'mean'
+            st.header("🔍 모든 상품/소재 성과 일람")
+            total_summary = full_df.groupby(['ID', '매체']).agg({
+                '노출수': 'sum', '클릭수': 'sum', '비용': 'sum'
             }).reset_index()
             
-            st.subheader("📊 소재 A vs B 주요 지표 요약")
-            st.dataframe(summary.style.highlight_max(axis=0, subset=['CTR(%)']), use_container_width=True)
+            # 파생 지표 재계산
+            total_summary['CTR(%)'] = (total_summary['클릭수'] / total_summary['노출수'] * 100).fillna(0)
+            total_summary['CPC'] = (total_summary['비용'] / total_summary['클릭수']).replace([np.inf, -np.inf], 0).fillna(0)
+            total_summary['CPM'] = (total_summary['비용'] / total_summary['노출수'] * 1000).replace([np.inf, -np.inf], 0).fillna(0)
             
-            st.info(f"선택된 소재의 매체 정보를 포함한 누적 데이터입니다. 각 소재가 어떤 매체에서 집행되었는지 한눈에 확인하세요.")
+            st.dataframe(
+                total_summary.style.background_gradient(cmap='Blues', subset=['CTR(%)'])
+                .format({'비용': '{:,.0f}', 'CPC': '{:,.1f}', 'CPM': '{:,.1f}', 'CTR(%)': '{:.2f}%'}),
+                use_container_width=True
+            )
+            st.caption("💡 모든 시트의 데이터를 통합한 결과입니다. CTR이 높고 CPC/CPM이 낮은 소재를 발굴하세요.")
 
         # --- TAB 3: 베이지안 승률 분석 ---
         with tab3:
-            st.header("⚖️ 통계적 우열 분석 (베이지안)")
-            st.markdown("""
-            > **그래프 보는 법:** 가로축은 예측 클릭률(%), 높이는 확신의 정도입니다. 
-            > 두 산이 서로 멀리 떨어져 있을수록, 우열 관계가 운이 아닌 '실력'에 의해 확실히 결정되었음을 의미합니다.
-            """)
+            st.header("⚖️ 소재간 베이지안 우열 진단")
+            c_sel1, c_sel2 = st.columns(2)
+            sel_a = c_sel1.selectbox("기준 소재 (A)", ids, index=0, key="b_a")
+            sel_b = c_sel2.selectbox("비교 소재 (B)", ids, index=min(1, len(ids)-1), key="b_b")
             
             df_a, df_b = full_df[full_df['ID']==sel_a], full_df[full_df['ID']==sel_b]
             s_a, s_b = df_a[['노출수','클릭수']].sum(), df_b[['노출수','클릭수']].sum()
@@ -128,45 +129,37 @@ if uploaded_file:
             dist_a = np.random.beta(s_a['클릭수']+1, s_a['노출수']-s_a['클릭수']+1, 10000)
             dist_b = np.random.beta(s_b['클릭수']+1, s_b['노출수']-s_b['클릭수']+1, 10000)
             
-            # 승률 계산 및 지능형 문구 통일
             prob_b_win = (dist_b > dist_a).mean()
             prob_a_win = 1 - prob_b_win
-            
-            if prob_a_win >= prob_b_win:
-                winner, winner_prob = sel_a, prob_a_win
-                loser = sel_b
-            else:
-                winner, winner_prob = sel_b, prob_b_win
-                loser = sel_a
+            winner, winner_prob, loser = (sel_a, prob_a_win, sel_b) if prob_a_win > prob_b_win else (sel_b, prob_b_win, sel_a)
 
-            fig_dist = go.Figure()
-            fig_dist.add_trace(go.Histogram(x=dist_a, name=f"A: {sel_a}", marker_color='blue', opacity=0.5))
-            fig_dist.add_trace(go.Histogram(x=dist_b, name=f"B: {sel_b}", marker_color='red', opacity=0.5))
-            fig_dist.update_layout(barmode='overlay', xaxis_title="예측 클릭률 (CTR)", yaxis_title="확률적 밀도")
-            st.plotly_chart(fig_dist, use_container_width=True)
+            st.plotly_chart(go.Figure(data=[
+                go.Histogram(x=dist_a, name=f"A: {sel_a}", opacity=0.5, marker_color='blue'),
+                go.Histogram(x=dist_b, name=f"B: {sel_b}", opacity=0.5, marker_color='red')
+            ]).update_layout(barmode='overlay', title="CTR 확률 분포 대조"), use_container_width=True)
             
-            st.success(f"🏆 **최종 진단:** 통계적 분석 결과, **[{winner}]** 소재가 **[{loser}]**보다 우수할 확률이 **{winner_prob*100:.1f}%**로 매우 압도적입니다.")
+            st.success(f"🏆 **최종 진단:** **[{winner}]** 소재가 **[{loser}]**보다 우수할 확률이 **{winner_prob*100:.1f}%**입니다.")
 
         # --- TAB 4: 머신러닝 성과 예측 ---
         with tab4:
             st.header("📈 성과 추세 및 미래 수명 예측")
-            target_df = full_df[full_df['ID']==sel_b].sort_values('날짜')
+            sel_target = st.selectbox("분석 대상 선택", ids, key="ml_target")
+            target_df = full_df[full_df['ID']==sel_target].sort_values('날짜')
             
             if len(target_df) >= 7:
                 f_dates, f_vals = ml_forecast(target_df)
                 fig_ml = go.Figure()
-                fig_ml.add_trace(go.Scatter(x=target_df['날짜'], y=target_df['CTR(%)'], name="현재까지 실적", line=dict(color='black')))
+                fig_ml.add_trace(go.Scatter(x=target_df['날짜'], y=target_df['CTR(%)'], name="현재 실적", line=dict(color='black')))
                 fig_ml.add_trace(go.Scatter(x=f_dates, y=f_vals, name="7일 뒤 예측", line=dict(dash='dash', color='red')))
                 st.plotly_chart(fig_ml, use_container_width=True)
                 
-                # 피로도 자동 진단
                 curr_ctr, pred_ctr = target_df['CTR(%)'].iloc[-1], f_vals[-1]
                 if pred_ctr < curr_ctr * 0.85:
-                    st.error(f"🚨 **광고 피로도 감지:** 향후 성과가 약 {(1-pred_ctr/curr_ctr)*100:.1f}% 하락할 추세입니다. 새로운 소재 교체를 권장합니다.")
+                    st.error(f"🚨 **피로도 주의:** 성과가 {(1-pred_ctr/curr_ctr)*100:.1f}% 하락할 것으로 보입니다. 소재 교체를 검토하세요.")
                 else:
-                    st.success("✅ **추세 안정적:** 현재 소재의 성과 흐름이 양호하며 당분간 운영 유지가 가능할 것으로 보입니다.")
+                    st.success("✅ **추세 양호:** 현재 소재의 성과 흐름이 안정적입니다.")
             else:
-                st.warning("데이터가 부족하여(7일 미만) 머신러닝 예측 모델을 가동할 수 없습니다.")
+                st.warning("예측을 위해 7일 이상의 데이터가 필요합니다.")
 
     else:
         st.error("데이터 로드 실패. 파일 형식 및 컬럼명을 확인하세요.")
