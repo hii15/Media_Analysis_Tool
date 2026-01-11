@@ -57,7 +57,6 @@ def ml_forecast_advanced(data):
         forecast = model.predict(future_x)
         future_dates = [data['날짜'].max() + timedelta(days=i) for i in range(1, 8)]
         
-        # 신뢰도 계산 (잔차 분석 기반)
         y_pred = model.predict(x)
         rmse = np.sqrt(np.mean((y - y_pred)**2))
         reliability = 1 - (rmse / (np.mean(y) + 1e-6))
@@ -88,9 +87,9 @@ if uploaded_file:
         full_df = pd.concat(all_dfs, ignore_index=True)
         ids = sorted(full_df['ID'].unique())
         
-        tab1, tab2, tab3, tab4 = st.tabs(["💎 상품 요약", "🔍 전체 성과", "⚖️ 베이지안 진단", "📈 수명 예측"])
+        tab1, tab2, tab3, tab4 = st.tabs(["💎 상품 요약", "🔍 전체 성과", "⚖️ 베이지안 진단", "📈 수명 예측 & 모델 가이드"])
 
-        # TAB 1: 상품 요약
+        # TAB 1 & 2 로직 (이전과 동일)
         with tab1:
             st.header("🏢 상품별 통합 성과")
             p_sum = full_df.groupby('상품명').agg({'노출수':'sum', '클릭수':'sum', '비용':'sum', 'CTR(%)':'mean'}).reset_index()
@@ -99,22 +98,23 @@ if uploaded_file:
             p_sum['효율성'] = (p_sum['CTR(%)'] / (p_sum['비용'] / p_sum['노출수'].replace(0, 1))).fillna(0)
             c2.plotly_chart(px.bar(p_sum, x='상품명', y='효율성', title="예산 효율성 가이드"), use_container_width=True)
 
-        # TAB 2: 전체 성과
         with tab2:
             st.header("🔍 모든 소재 성과 리포트")
             sum_df = full_df.groupby(['ID', '매체']).agg({'노출수':'sum', '클릭수':'sum', '비용':'sum'}).reset_index()
             sum_df['CTR(%)'] = (sum_df['클릭수'] / sum_df['노출수'] * 100).fillna(0)
             sum_df['CPC'] = (sum_df['비용'] / sum_df['클릭수']).replace([np.inf, -np.inf], 0).fillna(0)
             sum_df['CPM'] = (sum_df['비용'] / sum_df['노출수'] * 1000).replace([np.inf, -np.inf], 0).fillna(0)
-            try:
-                st.dataframe(sum_df.style.background_gradient(cmap='Blues', subset=['CTR(%)']).format({'비용':'{:,.0f}', 'CPC':'{:,.1f}', 'CPM':'{:,.1f}', 'CTR(%)':'{:.2f}%'}), use_container_width=True)
-            except:
-                st.dataframe(sum_df, use_container_width=True)
+            st.dataframe(sum_df.style.background_gradient(cmap='Blues', subset=['CTR(%)']).format({'비용':'{:,.0f}', 'CPC':'{:,.1f}', 'CPM':'{:,.1f}', 'CTR(%)':'{:.2f}%'}), use_container_width=True)
 
-        # TAB 3: 베이지안 진단
+        # TAB 3: 베이지안 (그래프 설명 보강)
         with tab3:
             st.header("⚖️ 소재간 베이지안 우열 진단")
-            st.info("💡 **그래프 읽는 법**: 가로축(X)은 예측 CTR, 세로축(Y)은 확신의 정도입니다. 두 산이 서로 멀리 떨어져 있을수록 성과 차이가 '운'이 아닌 '진짜 실력'임을 의미합니다.")
+            st.markdown("""
+            **📊 그래프 독해 가이드**
+            - **X축(예측 CTR):** 오른쪽으로 갈수록 성과가 좋음을 의미합니다.
+            - **Y축(확률 밀도):** 산이 높을수록 해당 데이터에 대한 확신이 강함을 의미합니다.
+            - **두 산의 거리:** 산이 서로 겹치지 않고 멀수록, A와 B의 성과 차이는 우연이 아닌 '실력'일 가능성이 높습니다.
+            """)
             c_sel1, c_sel2 = st.columns(2)
             sel_a = c_sel1.selectbox("기준 소재 (A)", ids, index=0, key="b_a")
             sel_b = c_sel2.selectbox("비교 소재 (B)", ids, index=min(1, len(ids)-1), key="b_b")
@@ -126,65 +126,62 @@ if uploaded_file:
                 dist_a = np.random.beta(s_a['클릭수']+1, s_a['노출수']-s_a['클릭수']+1, 10000)
                 dist_b = np.random.beta(s_b['클릭수']+1, s_b['노출수']-s_b['클릭수']+1, 10000)
                 prob_b_win = (dist_b > dist_a).mean()
-                
                 fig_dist = go.Figure()
                 fig_dist.add_trace(go.Histogram(x=dist_a, name=f"A: {sel_a}", marker_color='blue', opacity=0.5))
                 fig_dist.add_trace(go.Histogram(x=dist_b, name=f"B: {sel_b}", marker_color='red', opacity=0.5))
                 st.plotly_chart(fig_dist, use_container_width=True)
-                
                 winner = sel_b if prob_b_win > 0.5 else sel_a
                 win_p = prob_b_win if prob_b_win > 0.5 else 1 - prob_b_win
-                st.success(f"🏆 최종 진단: **[{winner}]** 소재가 더 우수할 확률이 **{win_p*100:.1f}%**로 매우 압도적입니다.")
+                st.success(f"🏆 최종 진단: **[{winner}]** 소재가 더 우수할 확률이 **{win_p*100:.1f}%**입니다.")
             else:
-                st.warning("데이터가 부족합니다. (최소 노출 100회 이상 필요)")
+                st.warning("노출 데이터가 100회 미만입니다. 더 많은 데이터가 쌓인 후 분석하세요.")
 
-        # TAB 4: 수명 예측 (고도화 반영)
+        # TAB 4: 수명 예측 & 모델 상세 가이드 (고도화 통합)
         with tab4:
-            st.header("📈 머신러닝 기반 수명 예측 및 피로도 진단")
-            sel_target = st.selectbox("수명 분석 대상 선택", ids, key="ml_target_final")
+            st.header("📈 머신러닝 수명 예측 및 모델 진단")
+            sel_target = st.selectbox("분석 대상 선택", ids, key="ml_target_v10")
             target_df = full_df[full_df['ID']==sel_target].sort_values('날짜')
             
             if len(target_df) >= 7:
                 f_dates, f_vals, rel_score = ml_forecast_advanced(target_df)
                 
-                # 그래프 시각화
+                # 1. 메인 그래프
                 fig_ml = go.Figure()
-                fig_ml.add_trace(go.Scatter(x=target_df['날짜'], y=target_df['CTR(%)'], name="실제 실적", line=dict(color='#1f77b4')))
-                fig_ml.add_trace(go.Scatter(x=f_dates, y=f_vals, name="7일 예측 추세", line=dict(dash='dash', color='#d62728')))
-                
-                # 임계선 (평균의 80%)
+                fig_ml.add_trace(go.Scatter(x=target_df['날짜'], y=target_df['CTR(%)'], name="실적", line=dict(color='#1f77b4')))
+                fig_ml.add_trace(go.Scatter(x=f_dates, y=f_vals, name="7일 예측", line=dict(dash='dash', color='#d62728')))
                 avg_ctr = target_df['CTR(%)'].mean()
-                threshold = avg_ctr * 0.8
-                fig_ml.add_hline(y=threshold, line_dash="dot", line_color="orange", annotation_text="교체 권장선")
+                fig_ml.add_hline(y=avg_ctr * 0.8, line_dash="dot", line_color="orange", annotation_text="교체 권장선")
                 st.plotly_chart(fig_ml, use_container_width=True)
                 
-                # 성과 지표 요약
+                # 2. 지표 요약
                 curr_ctr, pred_ctr = target_df['CTR(%)'].iloc[-1], f_vals[-1]
                 diff_pct = (pred_ctr - curr_ctr) / curr_ctr * 100
-                
                 c_m1, c_m2, c_m3 = st.columns(3)
                 c_m1.metric("현재 CTR", f"{curr_ctr:.2f}%")
                 c_m2.metric("7일 후 예측", f"{pred_ctr:.2f}%", f"{diff_pct:.1f}%")
-                c_m3.metric("예측 신뢰도", f"{rel_score*100:.1f}%")
+                c_m3.metric("모델 신뢰도", f"{rel_score*100:.1f}%")
                 
-                # 인공지능 상세 진단 리포트
+                # 3. AI 진단 리포트
                 st.divider()
-                st.subheader("🕵️ AI 상세 진단 결과")
                 if diff_pct < -10:
-                    st.error(f"🔴 **위험 (피로도 감지)**: 데이터 추세 분석 결과 성과 하락세가 뚜렷합니다. 일주일 내 성과가 {abs(diff_pct):.1f}% 추가 하락하여 임계점({threshold:.2f}%)에 근접할 것으로 보이니 소재 교체를 준비하십시오.")
+                    st.error(f"🔴 **진단: 소재 피로도 발생** - 현재 하락 추세가 뚜렷합니다. 예측 신뢰도는 {rel_score*100:.1f}%이며, 교체를 권장합니다.")
                 elif diff_pct > 10:
-                    st.success(f"🟢 **양호 (수명 충분)**: 현재 소재의 반응도가 상승 중이거나 매우 안정적입니다. 신뢰도 {rel_score*100:.1f}%의 분석 결과, 당분간 운영 유지가 가능합니다.")
+                    st.success(f"🟢 **진단: 성과 유지/상승** - 현재 수명이 충분히 남은 상태입니다. 운영 유지가 가능합니다.")
                 else:
-                    st.warning(f"🟡 **주의 (정체기)**: 성과 변화폭이 크지 않은 정체기입니다. 수명 주기의 후반부에 진입했을 가능성이 높으므로 새로운 A/B 테스트 소재를 준비할 시점입니다.")
-                
-                with st.expander("❓ 이 분석은 어떻게 도출되었나요?"):
-                    st.write("""
-                    1. **Huber Regression**: 이상치에 강한 머신러닝 알고리즘으로 시간 흐름에 따른 CTR 추세를 학습했습니다.
-                    2. **임계점 분석**: 과거 평균 성과의 80% 지점을 소재의 효용이 다한 시점으로 정의합니다.
-                    3. **신뢰도 점수**: 실제 데이터가 추세선에서 벗어난 정도(잔차)를 측정하여 수치화했습니다.
-                    """)
-            else:
-                st.warning("예측 분석을 위해 최소 7일 이상의 데이터가 필요합니다.")
+                    st.warning(f"🟡 **진단: 정체기 진입** - 성과가 박스권에 갇혀 있습니다. 신규 소재를 준비할 시점입니다.")
 
-    else:
-        st.error("데이터 로드 실패. 컬럼명을 확인하세요.")
+                # 4. 모델 가이드 (비교표 추가)
+                st.subheader("🤖 데이터 과학 모델 가이드")
+                st.write("현재 대시보드는 **Huber Regression**을 사용하여 이상치에 강한 수명 예측을 제공하고 있습니다.")
+                
+                m_compare = {
+                    "모델명": ["Huber (현재)", "Prophet", "CausalImpact", "MMM (구글 Meridian)"],
+                    "특징": ["이상치에 강함", "요일/계절성 반영", "광고 효과의 인과 분석", "전체 매체 기여도 분석"],
+                    "필요 데이터": ["매체 데이터", "매체 데이터", "매체 + 실험 데이터", "매체 + 게임 BI 매출 데이터"]
+                }
+                st.table(m_compare)
+                
+                if rel_score < 0.6:
+                    st.info("💡 **알림:** 현재 신뢰도가 낮게 나오는 이유는 데이터의 요일별 변동이 크기 때문일 수 있습니다. 웹툰 지면처럼 고정된 지면일수록 신뢰도는 높아지는 경향이 있습니다.")
+            else:
+                st.warning("최소 7일 이상의 데이터가 필요합니다.")
