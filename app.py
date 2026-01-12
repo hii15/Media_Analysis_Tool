@@ -3,190 +3,140 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-from prophet import Prophet
+from statsmodels.nonparametric.smoothers_lowess import lowess
 from datetime import datetime, timedelta
-import logging
 
-# 시스템 설정
-logging.getLogger('prophet').setLevel(logging.WARNING)
-st.set_page_config(page_title="Product Marketing Intelligence", layout="wide")
+# 설정
+st.set_page_config(page_title="High-Velocity Analytics v26", layout="wide")
 
-# --- [1. 데이터 로드 및 상품 단위 통합] ---
-def load_and_standardize(uploaded_file):
+# --- [1. 데이터 엔진: 상품/영상 지표 통합] ---
+def load_and_process(uploaded_file):
     if uploaded_file.name.endswith('.xlsx'):
         all_sheets = pd.read_excel(uploaded_file, sheet_name=None)
         df = pd.concat(all_sheets.values(), ignore_index=True)
     else:
         df = pd.read_csv(uploaded_file)
     
-    # 공백 제거 및 컬럼 매핑
     df.columns = [c.strip() for c in df.columns]
     mapping = {
-        '날짜': ['날짜', '일자', 'Date'],
-        '상품': ['상품명', '상품', 'Product'],
-        '소재': ['소재명', '소재', 'Creative'],
-        '노출': ['노출수', '노출', 'Impression'],
-        '클릭': ['클릭수', '클릭', 'Click'],
-        '비용': ['비용', '지출', 'Cost']
+        '날짜': ['날짜', '일자'], '상품': ['상품명', '상품'], '소재': ['소재명', '소재'],
+        '노출': ['노출수', '노출'], '클릭': ['클릭수', '클릭'], 
+        '조회': ['조회수', '조회', 'View'], '비용': ['비용', '지출']
     }
     
     final_df = pd.DataFrame()
     for k, v in mapping.items():
         for col in v:
             if col in df.columns:
-                final_df[k] = df[col]
-                break
+                final_df[k] = df[col]; break
     
+    if '조회' not in final_df.columns: final_df['조회'] = 0
     final_df['날짜'] = pd.to_datetime(final_df['날짜'])
-    for c in ['노출', '클릭', '비용']:
+    for c in ['노출', '클릭', '조회', '비용']:
         final_df[c] = pd.to_numeric(final_df[c], errors='coerce').fillna(0)
     
     final_df['CTR(%)'] = (final_df['클릭'] / (final_df['노출'] + 1e-9) * 100)
-    # 파싱 기준: 상품명과 소재명을 결합한 고유 ID 생성
+    final_df['VTR(%)'] = (final_df['조회'] / (final_df['노출'] + 1e-9) * 100)
     final_df['ID'] = "[" + final_df['상품'].astype(str) + "] " + final_df['소재'].astype(str)
-    return final_df.dropna(subset=['날짜'])
+    return final_df.sort_values('날짜')
 
-# --- [2. 트렌드 예측 및 적합도 계산] ---
-def get_trend_analysis(data):
-    # 최소 14일 이상의 데이터 확보 및 변동성 확인
-    if len(data) < 14 or data['CTR(%)'].std() < 0.01:
-        return None, 0, 0
+# --- [2. 트렌드 엔진: LOESS (단기 추세 최적화)] ---
+def get_velocity_trend(data, target_col):
+    if len(data) < 5: return None, 0
     
-    try:
-        df = data.groupby('날짜')['CTR(%)'].mean().reset_index().rename(columns={'날짜':'ds', 'CTR(%)':'y'})
-        m = Prophet(interval_width=0.8, daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=False)
-        m.fit(df)
-        
-        future = m.make_future_dataframe(periods=7)
-        forecast = m.predict(future)
-        
-        # 모델 적합도 (R-Squared)
-        y_true = df['y'].values
-        y_pred = forecast.iloc[:len(y_true)]['yhat'].values
-        r2 = 1 - (np.sum((y_true - y_pred)**2) / (np.sum((y_true - np.mean(y_true))**2) + 1e-9))
-        
-        # 최근 7일 추세 기울기
-        slope = (forecast['yhat'].values[-1] - forecast['yhat'].values[-7]) / 7
-        return forecast, slope, max(0, min(r2, 0.99))
-    except:
-        return None, 0, 0
+    # 딥러닝 대신 국소 회귀(LOESS)로 단기 흐름 파악
+    y = data[target_col].values
+    x = np.arange(len(y))
+    # frac=0.4는 최근 데이터 비중을 높여 단기 변화에 민감하게 반응하게 함
+    filtered = lowess(y, x, frac=0.4)
+    
+    current_val = filtered[-1, 1]
+    prev_val = filtered[-3, 1] if len(filtered) > 3 else filtered[0, 1]
+    velocity = (current_val - prev_val) / 2 # 가속도(기울기)
+    
+    return filtered, velocity
 
-# --- [3. 만원 단위 예산 배분 알고리즘] ---
-def optimize_budget_rounded(base_df, total_budget):
-    # 1. 성과 비례 가중치 계산 (기울기 기반)
-    # 기울기가 높을수록(성과 상승 중) 더 많은 예산 배정
-    base_df['weight'] = base_df['추세'].apply(lambda x: 1 + (x * 10) if x > 0 else 1 + (x * 5))
-    base_df['weight'] = base_df['weight'].clip(lower=0.5) # 최소 유지비율 50%
-    
-    # 2. 1차 제안가 계산
-    raw_proposal = base_df['현재지출'] * base_df['weight']
-    
-    # 3. 만원 단위 절삭 (실무 최적화)
-    base_df['제안예산'] = (raw_proposal / 10000).round() * 10000
-    
-    # 4. 절삭 후 발생하는 차액(Residual) 처리
-    current_total = base_df['제안예산'].sum()
-    diff = total_budget - current_total
-    
-    if abs(diff) >= 10000:
-        # 성과가 가장 좋은(기울기가 높은) 상품에 차액 몰아주기
-        best_idx = base_df['추세'].idxmax()
-        # 차액을 만원 단위로 보정하여 가산
-        base_df.at[best_idx, '제안예산'] += (diff // 10000) * 10000
-        
-    return base_df
-
-# --- [4. UI 메인 레이아웃] ---
-st.title("📦 Product Marketing Analytics System")
-
-uploaded_file = st.file_uploader("분석용 데이터를 업로드하세요 (Excel/CSV)", type=['csv', 'xlsx'])
+# --- [3. UI 레이아웃] ---
+uploaded_file = st.file_uploader("캠페인 데이터를 업로드하세요", type=['csv', 'xlsx'])
 
 if uploaded_file:
-    full_df = load_and_standardize(uploaded_file)
-    ids = sorted(full_df['ID'].unique())
-    
-    tabs = st.tabs(["📊 성과 대시보드", "⚖️ 성과 유의성 검정", "📈 트렌드 분석", "🎯 예산 재배분"])
+    df = load_and_process(uploaded_file)
+    ids = sorted(df['ID'].unique())
+    tabs = st.tabs(["📊 성과 대시보드", "⚖️ 유의성 진단", "📈 성과 가속도", "🎯 예산 재배분"])
 
+    # --- Tab 1: 팩트 중심 요약 ---
     with tabs[0]:
-        # 통합 데이터 시각화 (팩트 중심)
-        st.markdown("### 전체 상품 집계 데이터")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.plotly_chart(px.pie(full_df.groupby('상품')['비용'].sum().reset_index(), 
-                                   values='비용', names='상품', hole=0.4, title="상품별 비용 집행 비중"), use_container_width=True)
-        with c2:
-            st.plotly_chart(px.bar(full_df.groupby('상품')['CTR(%)'].mean().reset_index(), 
-                                   x='상품', y='CTR(%)', title="상품별 평균 CTR (%)"), use_container_width=True)
+        st.markdown("### 📊 통합 성과 요약")
+        st.caption("집행 기간 내 누적 데이터입니다. 상품별 비용 대비 효율을 평면적으로 비교합니다.")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.plotly_chart(px.pie(df.groupby('상품')['비용'].sum().reset_index(), values='비용', names='상품', hole=0.4, title="상품별 예산 비중"), use_container_width=True)
+        with col2:
+            metrics = ['CTR(%)']
+            if df['조회'].sum() > 0: metrics.append('VTR(%)')
+            sel_m = st.selectbox("지표 선택", metrics)
+            st.plotly_chart(px.bar(df.groupby('상품')[sel_m].mean().reset_index(), x='상품', y=sel_m, color=sel_m), use_container_width=True)
 
+    # --- Tab 2: 유의성 진단 (조회 지표 대응) ---
     with tabs[1]:
-        st.markdown("### 소재별 승률 분석")
-        # (기존 베이지안 비교 로직 유지 - 주석처리된 ID 기반 파싱)
-        sc1, sc2 = st.columns(2)
-        sel_a = sc1.selectbox("소재 A 선택", ids, index=0)
-        sel_b = sc2.selectbox("소재 B 선택", ids, index=min(1, len(ids)-1))
+        st.markdown("### ⚖️ 소재 유의성 진단")
+        st.caption("**Model**: Beta-Binomial (소량 데이터 최적화)")
+        c1, c2 = st.columns(2)
+        s1, s2 = c1.selectbox("소재 A", ids, index=0), c2.selectbox("소재 B", ids, index=min(1, len(ids)-1))
         
-        s_a = full_df[full_df['ID']==sel_a][['노출','클릭']].sum(numeric_only=True)
-        s_b = full_df[full_df['ID']==sel_b][['노출','클릭']].sum(numeric_only=True)
+        # 조회 데이터 유무 확인 후 UI 분기
+        v_sum = df[df['ID'].isin([s1, s2])]['조회'].sum()
+        mode = st.radio("분석 지표", ["클릭(CTR)", "조회(VTR)"]) if v_sum > 0 else "클릭(CTR)"
         
-        dist_a = np.random.beta(s_a['클릭']+1, s_a['노출']-s_a['클릭']+1, 5000)
-        dist_b = np.random.beta(s_b['클릭']+1, s_b['노출']-s_b['클릭']+1, 5000)
+        t_col, d_col = ('클릭', '노출') if "클릭" in mode else ('조회', '노출')
         
-        fig = go.Figure()
-        fig.add_trace(go.Histogram(x=dist_a, name=sel_a, opacity=0.6, marker_color='#3498db'))
-        fig.add_trace(go.Histogram(x=dist_b, name=sel_b, opacity=0.6, marker_color='#e74c3c'))
-        st.plotly_chart(fig, use_container_width=True)
+        for s, color in zip([s1, s2], ['#3498db', '#e74c3c']):
+            sub = df[df['ID']==s][[t_col, d_col]].sum()
+            dist = np.random.beta(sub[t_col]+1, sub[d_col]-sub[t_col]+1, 5000)
+            st.plotly_chart(go.Figure(data=[go.Histogram(x=dist, name=s, marker_color=color, opacity=0.6)]), use_container_width=True)
 
+    # --- Tab 3: 가속도 분석 (NeuralProphet 대체) ---
     with tabs[2]:
-        st.markdown("### 시계열 트렌드 예측")
-        sel_target = st.selectbox("분석 대상 선택", ids)
-        f_data, f_slope, r2 = get_trend_analysis(full_df[full_df['ID']==sel_target])
+        st.markdown("### 📈 성과 가속도 분석")
+        st.info("딥러닝 대신 LOESS 모델을 사용하여 단기 캠페인의 '상승/하락 흐름'을 포착합니다.")
+        sel_id = st.selectbox("분석 대상", ids)
+        target_df = df[df['ID']==sel_id]
         
-        if f_data is not None:
-            st.metric("예측 모델 적합도", f"{r2*100:.1f}%")
-            fig_f = go.Figure()
-            fig_f.add_trace(go.Scatter(x=full_df[full_df['ID']==sel_target]['날짜'], y=full_df[full_df['ID']==sel_target]['CTR(%)'], mode='markers', name="실측값"))
-            fig_f.add_trace(go.Scatter(x=f_data['ds'], y=f_data['yhat'], name="추세 예측", line=dict(color='red', dash='dash')))
-            fig_f.add_trace(go.Scatter(x=f_data['ds'], y=f_data['yhat_upper'], line=dict(width=0), showlegend=False))
-            fig_f.add_trace(go.Scatter(x=f_data['ds'], y=f_data['yhat_lower'], fill='tonexty', fillcolor='rgba(255,0,0,0.1)', name="예측 범위"))
-            st.plotly_chart(fig_f, use_container_width=True)
-        else:
-            st.warning("데이터가 불충분하거나(14일 미만) 수치 변동이 없어 예측이 불가능합니다.")
+        m_list = ['CTR(%)']
+        if target_df['조회'].sum() > 0: m_list.append('VTR(%)')
+        sel_m2 = st.selectbox("지표", m_list, key="v_m")
+        
+        trend_data, velocity = get_velocity_trend(target_df, sel_m2)
+        if trend_data is not None:
+            st.metric("현재 가속도", f"{velocity:.4f}", delta=f"{'상승' if velocity > 0 else '하락'}")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=target_df['날짜'], y=target_df[sel_m2], mode='markers', name="실제값"))
+            fig.add_trace(go.Scatter(x=target_df['날짜'], y=trend_data[:, 1], name="추세선", line=dict(color='red', width=3)))
+            st.plotly_chart(fig, use_container_width=True)
 
+    # --- Tab 4: 실무형 예산 배분 ---
     with tabs[3]:
-        st.markdown("### 만원 단위 예산 재배분안")
-        st.info("최근 7일간의 일평균 지출액을 기준으로 성과 추세를 반영하여 제안합니다.")
-        
-        if st.button("🚀 최적 배분 계산"):
-            last_7d = full_df[full_df['날짜'] > full_df['날짜'].max() - timedelta(days=7)]
-            
-            analysis_list = []
+        st.markdown("### 🎯 가속도 기반 예산 재배분")
+        st.caption("**Logic**: 최근 3일 가속도 가중치 + 만원 단위 절삭")
+        if st.button("배분안 산출"):
+            last_3d = df[df['날짜'] > df['날짜'].max() - timedelta(days=3)]
+            res = []
             for i in ids:
-                target_data = full_df[full_df['ID']==i]
-                _, slope, _ = get_trend_analysis(target_data)
-                recent_avg_spend = last_7d[last_7d['ID']==i]['비용'].mean()
-                if recent_avg_spend > 0:
-                    analysis_list.append({'ID': i, '현재지출': recent_avg_spend, '추세': slope})
+                _, v = get_velocity_trend(df[df['ID']==i], 'CTR(%)')
+                curr = last_3d[last_3d['ID']==i]['비용'].mean()
+                if curr > 0:
+                    # 가속도가 양수면 최대 20% 증액, 음수면 최대 20% 감액
+                    weight = 1 + np.clip(v * 50, -0.2, 0.2)
+                    proposed = round((curr * weight) / 10000) * 10000
+                    res.append({'상품소재': i, '현재 일평균': curr, '가속도': v, '제안 예산': proposed})
             
-            ana_df = pd.DataFrame(analysis_list)
-            if not ana_df.empty:
-                result_df = optimize_budget_rounded(ana_df, ana_df['현재지출'].sum())
-                
-                # 결과 테이블 정제
-                result_df['조정액'] = result_df['제안예산'] - result_df['현재지출']
-                display_df = result_df[['ID', '현재지출', '제안예산', '조정액', '추세']]
-                
-                st.dataframe(display_df.style.format({
-                    '현재지출': '{:,.0f}', '제안예산': '{:,.0f}', '조정액': '{:+,.0f}', '추세': '{:.4f}'
-                }))
-            else:
-                st.error("최근 7일간의 지출 데이터가 있는 상품이 없습니다.")
+            st.table(pd.DataFrame(res).style.format({'현재 일평균':'{:,.0f}', '제안 예산':'{:,.0f}'}))
 
-# --- 각 탭별 모델 설명 (하단 배치) ---
+# --- 하단 모델 설명 ---
 st.markdown("---")
-with st.expander("🛠️ 시스템 분석 가이드"):
+with st.expander("📝 v26 Short-Term Logic Guide"):
     st.markdown("""
-    - **성과 요약**: 상품명 열을 기준으로 데이터 시트를 통합하여 원본 수치를 집계합니다.
-    - **유의성 검정**: 베이지안 통계(Beta-Binomial)를 통해 노출량 대비 클릭 성과의 안정성을 검증합니다.
-    - **트렌드 분석**: Prophet 라이브러리를 통해 데이터의 요일별 특성과 주기성을 파악합니다. 적합도가 100%에 가깝게 나오는 경우는 시계열적 변동이 없는 평탄한 데이터일 때 발생하며, 이 경우 예측 신뢰도는 낮게 평가됩니다.
-    - **예산 재배분**: 최근 일주일 지출을 베이스라인으로 성과 기울기에 따라 가중치를 부여하며, 모든 제안가는 실무 편의를 위해 **10,000원 단위로 절삭** 및 보정됩니다.
+    - **유의성 진단**: 베이지안 사후 분포를 사용하여, 데이터가 적은(노출 1,000회 미만) 단기 캠페인에서도 소재 우열을 판별합니다.
+    - **가속도(LOESS)**: NeuralProphet이 학습하기엔 데이터가 너무 적으므로, 국소 회귀를 통해 최근 3~5일의 흐름에 민감하게 반응하는 추세선을 그립니다.
+    - **예산 배분**: 먼 미래의 예측이 아니라, **"지금 잘 되고 있는가?"**에 집중합니다. 가속도가 붙은 소재에 예산을 집중하며, 모든 수치는 실무 가이드인 **만원 단위**로 제안됩니다.
     """)
