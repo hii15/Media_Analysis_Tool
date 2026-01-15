@@ -83,9 +83,13 @@ def analyze_empirical_bayes(df):
         minlength=len(agg)
     ) / 5000
     
-    # 최근 7일 평균 비용
+    # 최근 7일 평균 비용 (전체 기간 기준)
     max_date = df['날짜'].max()
-    last_costs = df[df['날짜'] >= max_date - timedelta(days=7)].groupby('ID')['비용'].mean()
+    date_7d_ago = max_date - timedelta(days=6)  # 7일 = 오늘 포함 6일 전
+    last_7d = df[df['날짜'] >= date_7d_ago]
+    
+    # 소재별 최근 7일 총비용 / 7 = 일평균
+    last_costs = last_7d.groupby('ID')['비용'].sum() / 7
     agg = agg.merge(last_costs.rename('avg_cost_7d'), on='ID', how='left').fillna(0)
     
     return agg, (alpha_0, beta_0, kappa, global_ctr)
@@ -670,16 +674,20 @@ if uploaded_file:
                     res_agg['제안예산'] = res_agg['avg_cost_7d']
                     
                 elif strategy == "상위 집중 (70%)":
+                    # 상위 2개에 70%, 나머지에 30% 분배
                     top2 = res_agg.nlargest(2, 'exp_ctr')['ID'].values
+                    n_others = len(res_agg) - 2  # 나머지 소재 수
+                    
                     res_agg['제안예산'] = res_agg.apply(
-                        lambda x: total_budget * 0.35 if x['ID'] in top2 else total_budget * 0.15,
+                        lambda x: total_budget * 0.35 if x['ID'] in top2 
+                                  else total_budget * 0.30 / n_others if n_others > 0 
+                                  else 0,
                         axis=1
                     )
                     
                 else:  # 효율 비례
-                    res_agg['제안예산'] = (
-                        res_agg['효율점수'] / res_agg['효율점수'].sum() * total_budget
-                    )
+                    total_efficiency = res_agg['효율점수'].sum()
+                    res_agg['제안예산'] = res_agg['효율점수'] / total_efficiency * total_budget
                 
                 result_df = res_agg[['ID', 'avg_cost_7d', '제안예산', 'exp_ctr']].copy()
                 result_df['변화율'] = (
@@ -697,7 +705,20 @@ if uploaded_file:
                     use_container_width=True
                 )
                 
-                st.success(f"✅ 총 예산: ₩{total_budget:,.0f} (변동 없음)")
+                # 예산 총합 검증
+                current_sum = result_df['현재 일평균'].sum()
+                proposed_sum = result_df['제안 일평균'].sum()
+                
+                col1, col2, col3 = st.columns(3)
+                col1.metric("현재 총예산", f"₩{current_sum:,.0f}")
+                col2.metric("제안 총예산", f"₩{proposed_sum:,.0f}")
+                col3.metric("차이", f"₩{proposed_sum - current_sum:,.0f}", 
+                           delta=f"{(proposed_sum/current_sum - 1)*100:.2f}%" if current_sum > 0 else "0%")
+                
+                if abs(proposed_sum - current_sum) < 1:  # 반올림 오차 허용
+                    st.success("✅ 총 예산이 유지됩니다 (제로섬)")
+                else:
+                    st.warning(f"⚠️ 예산 차이 발생: ₩{abs(proposed_sum - current_sum):,.0f}")
     else:
         st.warning("데이터를 로드할 수 없습니다. 파일 형식을 확인해주세요.")
 else:
