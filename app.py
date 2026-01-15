@@ -217,10 +217,12 @@ if uploaded_file:
             st.markdown("### 📈 소재별 상세 성과")
             
             display_df = res_agg[['ID', 'raw_ctr', 'exp_ctr', '노출', '클릭', '비용', 'prob_is_best']].copy()
-            display_df.columns = ['소재', '원본CTR(%)', '보정CTR(%)', '노출수', '클릭수', '비용', '최고확률']
-            display_df['원본CTR(%)'] = display_df['원본CTR(%)'] * 100
+            # 먼저 값 변환
+            display_df['raw_ctr'] = display_df['raw_ctr'] * 100
             display_df['exp_ctr'] = display_df['exp_ctr'] * 100
-            display_df['최고확률'] = display_df['최고확률'] * 100
+            display_df['prob_is_best'] = display_df['prob_is_best'] * 100
+            # 그 다음 컬럼명 변경
+            display_df.columns = ['소재', '원본CTR(%)', '보정CTR(%)', '노출수', '클릭수', '비용', '최고확률']
             
             st.dataframe(
                 display_df.style.format({
