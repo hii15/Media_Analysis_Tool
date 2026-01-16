@@ -191,11 +191,37 @@ if uploaded_file:
             col1.metric("전체 평균 CTR", f"{global_ctr*100:.2f}%")
             col2.metric("분석 기간", f"{(df['날짜'].max() - df['날짜'].min()).days}일")
             col3.metric("총 소재 수", len(ids))
-            col4.metric("총 집행 비용", f"₩{df['비용'].sum()/10000:.0f}만")
+            col4.metric("총 집행 비용", f"{df['비용'].sum():,.0f}원")
+            
+            with st.expander("ℹ️ CTR(Click-Through Rate)이란?"):
+                st.markdown("""
+                **CTR = (클릭수 / 노출수) × 100%**
+                
+                광고가 1000번 노출되어 10번 클릭되었다면 CTR = 1.0%
+                - 높을수록: 광고가 사용자에게 매력적
+                - 낮을수록: 소재 개선 필요 또는 타겟팅 문제
+                - 업계 평균: 디스플레이 0.5~1%, 검색광고 2~5%
+                """)
             
             st.markdown("---")
             st.markdown("### 🏆 최고 성과 소재 확률")
-            st.markdown("*Bayesian 사후확률 기반 - 5000회 시뮬레이션*")
+            st.markdown("*Bayesian 사후확률 기반 - 5000회 Monte Carlo 시뮬레이션*")
+            
+            with st.expander("ℹ️ 이 확률은 무엇을 의미하나요?"):
+                st.markdown("""
+                **"각 소재가 실제로 최고 CTR을 가질 확률"**
+                
+                예시:
+                - 소재 A: 65% → 100번 중 65번은 A가 최고
+                - 소재 B: 25% → 100번 중 25번은 B가 최고
+                - 소재 C: 10% → 100번 중 10번은 C가 최고
+                
+                ⚠️ **주의사항:**
+                - 이는 **현재 데이터 기준** 확률입니다
+                - 향후 성과를 보장하지 않습니다
+                - 확률이 비슷하면 → 더 많은 데이터 필요
+                - 과도한 집중 투자는 위험할 수 있습니다
+                """)
             
             # 확률 바 차트
             fig_prob = px.bar(
@@ -234,17 +260,54 @@ if uploaded_file:
                     '보정CTR(%)': '{:.2f}',
                     '노출수': '{:,.0f}',
                     '클릭수': '{:,.0f}',
-                    '비용': '₩{:,.0f}',
+                    '비용': '{:,.0f}원',
                     '최고확률': '{:.1f}%'
                 }).background_gradient(subset=['보정CTR(%)'], cmap='RdYlGn'),
                 use_container_width=True
             )
+            
+            with st.expander("ℹ️ 원본CTR vs 보정CTR 차이"):
+                st.markdown("""
+                **원본CTR:** 각 소재의 실제 클릭률 (클릭/노출)
+                **보정CTR:** Empirical Bayes로 극단값을 완화한 CTR
+                
+                예시:
+                - 소재 A: 노출 100만, 클릭 5000 → 원본 0.5%
+                - 소재 B: 노출 100, 클릭 10 → 원본 10% (!)
+                
+                소재 B는 데이터가 적어서 우연히 높을 가능성 큼
+                → 보정CTR은 전체 평균 쪽으로 조정 (예: 2.1%)
+                
+                **언제 차이가 크나?**
+                - 노출수가 적을수록
+                - 전체 평균과 차이가 클수록
+                """)
         
         # ====================
         # TAB 2: Bayesian Analysis
         # ====================
         with tabs[1]:
             st.markdown("### 🧬 Empirical Bayes 방법론")
+            
+            with st.expander("ℹ️ Empirical Bayes란? (초보자용 설명)"):
+                st.markdown("""
+                **문제 상황:**
+                - 소재 A: 노출 100만, 클릭 5000 → CTR 0.50%
+                - 소재 B: 노출 100, 클릭 5 → CTR 5.00% (10배!)
+                
+                소재 B가 정말 10배 좋을까요? **아닙니다.** 데이터가 적어서 우연일 가능성 높습니다.
+                
+                **Empirical Bayes 해결책:**
+                1. 전체 평균 CTR을 "사전 믿음"으로 설정
+                2. 각 소재의 실제 데이터와 결합
+                3. 극단적인 값을 전체 평균 쪽으로 "당김"
+                
+                **결과:**
+                - 데이터 많은 소재 → 거의 그대로
+                - 데이터 적은 소재 → 전체 평균에 가깝게 보정
+                
+                이렇게 하면 "운 좋게 높은" 소재에 속지 않습니다!
+                """)
             
             st.markdown(f"""
             **핵심 개념:**
@@ -256,18 +319,51 @@ if uploaded_file:
             col1, col2, col3 = st.columns(3)
             col1.metric("Prior α₀", f"{a0:.1f}")
             col2.metric("Prior β₀", f"{b0:.1f}")
-            col3.metric("신뢰도 κ", f"{k_est:.1f}")
+            col3.metric("신뢰도 κ (Kappa)", f"{k_est:.1f}")
             
-            st.markdown(f"""
-            **κ (Kappa) 해석:**
-            - 현재 값: **{k_est:.1f}**
-            - κ가 클수록 → 전체 평균을 더 신뢰 (보수적 평가)
-            - κ가 작을수록 → 개별 소재 데이터를 더 신뢰
-            - 적정 범위: 10~1000 (현재 {'✅ 적절' if 10 < k_est < 1000 else '⚠️ 조정 필요'})
-            """)
+            with st.expander("ℹ️ κ(Kappa) 값이란?"):
+                st.markdown(f"""
+                **κ(Kappa) = 사전 정보의 강도**
+                
+                κ가 크면 → 전체 평균을 더 신뢰 (보수적 평가)
+                κ가 작으면 → 개별 소재 데이터를 더 신뢰
+                
+                **현재 값: {k_est:.1f}**
+                - κ = 10 정도: 개별 데이터 중시 (10번 시행 정도의 신뢰도)
+                - κ = 100 정도: 균형 (100번 시행 정도의 신뢰도)
+                - κ = 1000 정도: 전체 평균 중시 (1000번 시행 정도의 신뢰도)
+                
+                적정 범위: 10~1000 (현재 {'✅ 적절' if 10 < k_est < 1000 else '⚠️ 조정 필요'})
+                
+                ⚠️ **기술적 한계:**
+                현재 κ는 관측 CTR 분산 기반 (Method of Moments)
+                노출수 차이가 큰 경우 과소 추정 가능
+                → 향후 Beta-Binomial MLE 또는 Hierarchical Bayes 권장
+                """)
             
             st.markdown("---")
             st.markdown("### 📊 사후확률 분포 (Posterior Distribution)")
+            
+            with st.expander("ℹ️ 사후확률 분포란?"):
+                st.markdown("""
+                **이 그래프는 "각 소재의 진짜 CTR 범위"를 보여줍니다**
+                
+                예시:
+                - 소재 A: 0.4%~0.6% 사이에 95% 확률로 존재
+                - 소재 B: 0.3%~0.9% 사이에 95% 확률로 존재
+                
+                **분포가 좁으면:**
+                - 데이터가 많거나 일관성이 높음
+                - "이 소재의 진짜 성과를 확신함"
+                
+                **분포가 넓으면:**
+                - 데이터가 적거나 변동성이 큼
+                - "더 많은 테스트 필요"
+                
+                **분포가 겹치면:**
+                - 소재 간 차이가 통계적으로 명확하지 않음
+                - "둘 다 비슷할 가능성 높음"
+                """)
             
             fig_post = go.Figure()
             for _, row in res_agg.iterrows():
@@ -288,15 +384,6 @@ if uploaded_file:
                 hovermode='x unified'
             )
             st.plotly_chart(fig_post, use_container_width=True)
-            
-            st.info("""
-            **📖 그래프 해석:**
-            - X축: 해당 소재의 "진짜" CTR 범위
-            - Y축: 각 CTR일 확률 (높을수록 그 값일 가능성 높음)
-            - 분포가 좁을수록 → 확신도 높음 (데이터 많거나 일관성 높음)
-            - 분포가 넓을수록 → 불확실성 높음 (더 많은 테스트 필요)
-            - 분포가 겹치면 → 소재 간 차이가 통계적으로 명확하지 않음
-            """)
         
         # ====================
         # TAB 3: Trend & CUSUM
@@ -401,7 +488,7 @@ if uploaded_file:
             
             st.info(f"""
             **📖 CUSUM 방법론:**
-            - **임계값 h = {-h_threshold:.2f}** (몬테카를로 {500}회 시뮬레이션)
+            - **임계값 h = {-h_threshold:.2f}** (Monte Carlo {500}회 시뮬레이션)
             - **목표 ARL = 30일** (정상 상태에서 평균 30일마다 1회 오경보)
             - **달성 ARL = {achieved_arl:.0f}일** (실제 시뮬레이션 결과)
             
@@ -417,9 +504,44 @@ if uploaded_file:
             - ARL 30일 = "정상 상태에서 한 달에 한 번 정도만 오경보"
             """)
             
+            with st.expander("ℹ️ ARL(Average Run Length)이란?"):
+                st.markdown("""
+                **ARL = 오경보가 나기까지 평균 시간**
+                
+                예시:
+                - ARL = 10일: 정상 상태에서 평균 10일마다 1회 오경보
+                - ARL = 30일: 정상 상태에서 평균 30일마다 1회 오경보
+                - ARL = 100일: 정상 상태에서 평균 100일마다 1회 오경보
+                
+                **왜 ARL이 중요한가?**
+                오경보가 너무 많으면:
+                - 실무자가 경고를 무시하게 됨
+                - "늑대가 나타났다" 효과
+                - 의사결정 피로
+                
+                **적정 ARL 선택:**
+                - 공격적 감지: ARL 10일 (신규 소재 테스트)
+                - 균형: ARL 30일 (일반 모니터링)
+                - 보수적: ARL 100일 (안정적 장기 캠페인)
+                """)
+            
             # ========== 추가 분석 섹션 ==========
             st.markdown("---")
             st.markdown("### 🔬 고급 통계 분석")
+            
+            with st.expander("ℹ️ 고급 분석이란?"):
+                st.markdown("""
+                **이 섹션은 CUSUM의 성능을 심층 분석합니다**
+                
+                1. **ARL 곡선**: h값에 따라 오경보 빈도가 어떻게 변하나?
+                2. **목표 ARL 비교**: 공격적 vs 보수적 설정의 차이
+                3. **Power 분석**: 실제 하락 시 며칠 만에 감지하나?
+                
+                **누구에게 유용한가?**
+                - 통계 담당자: 파라미터 조정 근거
+                - 의사결정자: "15% 하락하면 며칠 만에 알 수 있나?"
+                - 감사/검증: 시스템 신뢰성 증명
+                """)
             
             analysis_tab = st.radio(
                 "분석 선택:",
@@ -429,6 +551,21 @@ if uploaded_file:
             
             if analysis_tab == "ARL 곡선 (h값의 영향)":
                 st.markdown("**h값에 따른 ARL(오경보 간격) 변화**")
+                
+                with st.expander("ℹ️ 이 분석이 왜 필요한가요?"):
+                    st.markdown("""
+                    **질문: "h를 7로 할까 10으로 할까?"**
+                    
+                    이 그래프는 그 질문에 답합니다.
+                    
+                    **X축:** 임계값 h (낮을수록 민감, 높을수록 보수적)
+                    **Y축:** 정상 상태에서 오경보까지 평균 일수
+                    
+                    **활용:**
+                    - 빨간 선(목표 ARL 30일)과 교차하는 점 = 최적 h
+                    - 곡선이 가파르면 → h에 민감 (신중히 선택)
+                    - 곡선이 완만하면 → h 선택이 덜 중요
+                    """)
                 
                 with st.spinner('ARL 곡선 계산 중... (약 10초 소요)'):
                     h_range = np.arange(1.0, 20.0, 1.0)
@@ -495,6 +632,24 @@ if uploaded_file:
             elif analysis_tab == "목표 ARL 비교":
                 st.markdown("**서로 다른 ARL 목표에 따른 임계값 비교**")
                 
+                with st.expander("ℹ️ 실무 시나리오별 ARL 선택 가이드"):
+                    st.markdown("""
+                    **시나리오 1: 신규 소재 테스트 초기**
+                    - 목표 ARL: 10일 (공격적)
+                    - 이유: 빠르게 문제 파악, 오경보 감수
+                    - 예산: 높음 (손실 위험 큼)
+                    
+                    **시나리오 2: 일반 상시 모니터링**
+                    - 목표 ARL: 30일 (균형) ← **권장**
+                    - 이유: 오경보와 감지 속도의 균형
+                    - 예산: 중간
+                    
+                    **시나리오 3: 안정적 장기 캠페인**
+                    - 목표 ARL: 100일 (보수적)
+                    - 이유: 확실한 변화만 반응, 변동성 높은 상품
+                    - 예산: 낮음 or 계절성 높음
+                    """)
+                
                 with st.spinner('다양한 ARL 시나리오 계산 중...'):
                     target_arls = [10, 20, 30, 50, 100]
                     comparison_results = []
@@ -551,8 +706,33 @@ if uploaded_file:
                 """)
             
             else:  # Power 분석
-                st.markdown("**성과 하락 시 감지 속도 분석**")
-                st.markdown("*'15% CTR 하락이 발생하면 며칠 만에 감지할 수 있나?'*")
+                st.markdown("### 🎯 Power 분석 (감지 속도)")
+                st.markdown("*'CTR이 실제로 하락하면 며칠 만에 감지할 수 있나?'*")
+                
+                with st.expander("ℹ️ Power 분석이란?"):
+                    st.markdown("""
+                    **ARL vs Power 분석의 차이**
+                    
+                    **ARL (이전 분석):**
+                    - 질문: "정상일 때 오경보가 얼마나 자주?"
+                    - 목적: 오경보 관리
+                    
+                    **Power 분석 (지금):**
+                    - 질문: "진짜 문제가 생기면 얼마나 빨리 알 수 있나?"
+                    - 목적: 감지 능력 평가
+                    
+                    **실무 예시:**
+                    소재 피로도로 CTR이 15% 하락했다면
+                    → CUSUM이 평균 며칠 만에 경고를 줄까?
+                    
+                    **활용:**
+                    - "5일 안에 알 수 있다" → 빠른 대응 가능
+                    - "20일 걸린다" → 손실 큼, 임계값 조정 필요
+                    
+                    ⚠️ **가정:**
+                    현재 분석은 CTR의 "상대적 하락"(예: 15% 감소) 기준
+                    절대적 하락(예: 0.1%p 감소)이 중요하면 다른 접근 필요
+                    """)
                 
                 with st.spinner('Power 분석 실행 중...'):
                     decline_scenarios = [0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
@@ -644,7 +824,43 @@ if uploaded_file:
         with tabs[3]:
             st.markdown("### 💰 예산 효율 분석")
             
+            with st.expander("ℹ️ 이 탭의 목적과 한계"):
+                st.markdown("""
+                **목적:**
+                "현재 예산을 어떻게 재분배하면 좋을까?" 시뮬레이션
+                
+                **방법:**
+                - CTR과 비용을 기반으로 효율 점수 계산
+                - 상위 소재에 집중 vs 효율 비례 배분 비교
+                
+                ⚠️ **중요: 이 탭의 한계**
+                - **전환/매출 데이터 없음** → 진짜 ROI를 모름
+                - **인과 추론 아님** → 예산 늘린다고 성과 보장 안 됨
+                - **한계 효율 무시** → 예산 2배 ≠ 클릭 2배
+                - **목적:** "만약 이렇게 하면?" 시나리오 탐색용
+                
+                **실제 의사결정 시 필요한 것:**
+                1. A/B 테스트로 인과 효과 확인
+                2. 전환율/LTV 데이터와 결합
+                3. 점진적 증액으로 한계 효율 측정
+                4. 경쟁 입찰, 노출 한계 등 외부 요인 고려
+                """)
+            
             res_agg['효율점수'] = res_agg['exp_ctr'] / (res_agg['avg_cost_7d'] / 100000 + 1e-9)
+            
+            with st.expander("ℹ️ 효율점수 계산 방식"):
+                st.markdown("""
+                **효율점수 = CTR / (비용 / 10만)**
+                
+                예시:
+                - 소재 A: CTR 0.5%, 일평균 10만원 → 점수 = 0.5 / 1 = 0.5
+                - 소재 B: CTR 1.0%, 일평균 30만원 → 점수 = 1.0 / 3 = 0.33
+                
+                **해석:**
+                점수가 높을수록 "적은 비용으로 높은 CTR"
+                
+                ⚠️ 단, CTR ≠ 수익이므로 참고용으로만 사용
+                """)
             
             fig_scatter = px.scatter(
                 res_agg,
@@ -654,13 +870,31 @@ if uploaded_file:
                 color='ID',
                 text='ID',
                 title="비용 대비 성과 분포",
-                labels={'avg_cost_7d': '일평균 비용 (최근 7일)', 'exp_ctr': '보정 CTR'}
+                labels={'avg_cost_7d': '일평균 비용 (최근 7일, 원)', 'exp_ctr': '보정 CTR'}
             )
             fig_scatter.update_traces(textposition='top center')
             st.plotly_chart(fig_scatter, use_container_width=True)
             
             st.markdown("---")
             st.markdown("### 🎯 예산 재분배 시뮬레이션")
+            
+            with st.expander("ℹ️ 각 전략 설명"):
+                st.markdown("""
+                **1. 현재 유지**
+                - 아무것도 바꾸지 않음
+                - 기준선으로 사용
+                
+                **2. 상위 집중 (70%)**
+                - 상위 2개 소재에 70% 집중 (각 35%)
+                - 나머지 소재에 30% 분배
+                - 공격적 전략: 승자에 베팅
+                
+                **3. 효율 비례 배분**
+                - 효율 점수에 비례해서 배분
+                - 균형 전략: 모든 소재 고려
+                
+                ⚠️ 모든 전략은 **총 예산 불변** (제로섬)
+                """)
             
             strategy = st.radio(
                 "전략 선택:",
@@ -697,8 +931,8 @@ if uploaded_file:
                 
                 st.dataframe(
                     result_df.style.format({
-                        '현재 일평균': '₩{:,.0f}',
-                        '제안 일평균': '₩{:,.0f}',
+                        '현재 일평균': '{:,.0f}원',
+                        '제안 일평균': '{:,.0f}원',
                         '보정CTR(%)': '{:.2%}',
                         '변화율(%)': '{:+.1f}%'
                     }).background_gradient(subset=['변화율(%)'], cmap='RdYlGn'),
@@ -710,15 +944,15 @@ if uploaded_file:
                 proposed_sum = result_df['제안 일평균'].sum()
                 
                 col1, col2, col3 = st.columns(3)
-                col1.metric("현재 총예산", f"₩{current_sum:,.0f}")
-                col2.metric("제안 총예산", f"₩{proposed_sum:,.0f}")
-                col3.metric("차이", f"₩{proposed_sum - current_sum:,.0f}", 
+                col1.metric("현재 총예산", f"{current_sum:,.0f}원")
+                col2.metric("제안 총예산", f"{proposed_sum:,.0f}원")
+                col3.metric("차이", f"{proposed_sum - current_sum:,.0f}원", 
                            delta=f"{(proposed_sum/current_sum - 1)*100:.2f}%" if current_sum > 0 else "0%")
                 
                 if abs(proposed_sum - current_sum) < 1:  # 반올림 오차 허용
                     st.success("✅ 총 예산이 유지됩니다 (제로섬)")
                 else:
-                    st.warning(f"⚠️ 예산 차이 발생: ₩{abs(proposed_sum - current_sum):,.0f}")
+                    st.warning(f"⚠️ 예산 차이 발생: {abs(proposed_sum - current_sum):,.0f}원")
     else:
         st.warning("데이터를 로드할 수 없습니다. 파일 형식을 확인해주세요.")
 else:
