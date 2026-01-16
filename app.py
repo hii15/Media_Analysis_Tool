@@ -638,11 +638,11 @@ if uploaded_file:
         # ====================
         if analysis_mode == "🔬 전문가 모드":
             with tabs[4]:
-            st.markdown("### 📉 CUSUM 기반 이상 감지")
-            st.markdown("**Cumulative Sum Control Chart - 성과 하락 조기 경보 시스템**")
-            
-            t_id = st.selectbox("분석할 소재 선택", ids, key='cusum_material')
-            sub = df[df['ID'] == t_id].sort_values('날짜')
+                st.markdown("### 📉 CUSUM 기반 이상 감지")
+                st.markdown("**Cumulative Sum Control Chart - 성과 하락 조기 경보 시스템**")
+                
+                t_id = st.selectbox("분석할 소재 선택", ids, key='cusum_material')
+                sub = df[df['ID'] == t_id].sort_values('날짜')
             
             # 기준 CTR 설정
             if len(sub) >= 7:
