@@ -631,7 +631,7 @@ if uploaded_file:
                     borderwidth=1
                 )
             )
-                            st.plotly_chart(fig_post, use_container_width=True)
+            st.plotly_chart(fig_post, use_container_width=True)
         
         # ====================
         # TAB 4: CUSUM (전문가 모드만)
