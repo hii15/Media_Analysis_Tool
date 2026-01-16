@@ -517,7 +517,7 @@ if uploaded_file:
         # ====================
         if analysis_mode == "🔬 전문가 모드":
             with tabs[3]:
-            st.markdown("### 🧬 Empirical Bayes 방법론")
+                st.markdown("### 🧬 Empirical Bayes 방법론")
             
             with st.expander("ℹ️ Empirical Bayes란? (초보자용 설명)"):
                 st.markdown("""
