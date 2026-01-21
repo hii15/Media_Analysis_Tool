@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 from scipy.stats import beta
 from sklearn.linear_model import LinearRegression
 
-st.set_page_config(page_title="게임 마케팅 통합 분석", layout="wide")
-st.title("🎮 게임 마케팅 통합 분석 시스템")
+st.set_page_config(page_title="마케팅 통합 분석", layout="wide")
+st.title("🎮 마케팅 통합 분석 시스템")
 st.markdown("**Bayesian 통계 기반 성과 분석 & 의사결정 지원**")
 st.markdown("---")
 
@@ -151,6 +151,27 @@ def estimate_h_via_arl(p0, imps_series, target_arl=30, sims=500):
             return h, actual_arl
     
     return h_candidates[-1], np.mean(run_lengths)
+
+def get_adaptive_threshold(p0, daily_impressions):
+    base_h = -8.0
+    
+    if p0 < 0.005:
+        ctr_factor = 0.6
+    elif p0 < 0.01:
+        ctr_factor = 0.8
+    elif p0 < 0.02:
+        ctr_factor = 1.0
+    else:
+        ctr_factor = 1.2
+    
+    if daily_impressions > 5000000:
+        volume_factor = 1.5
+    elif daily_impressions > 1000000:
+        volume_factor = 1.2
+    else:
+        volume_factor = 1.0
+    
+    return base_h * ctr_factor * volume_factor
 
 def get_confidence_level(material, df):
     mat_id = material['ID']
@@ -583,7 +604,16 @@ if uploaded_file:
             
             st.markdown("---")
             
-            selected_material = st.selectbox("소재 선택", ids)
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                selected_material = st.selectbox("소재 선택", ids)
+            with col2:
+                threshold_mode = st.radio(
+                    "임계값 설정",
+                    ["자동", "수동"],
+                    help="자동: CTR/노출 규모 기반 계산 | 수동: 직접 조정"
+                )
+            
             sub = df[df['ID'] == selected_material].sort_values('날짜')
             
             if len(sub) >= 7:
@@ -591,14 +621,151 @@ if uploaded_file:
             else:
                 p0_val = sub['클릭'].sum() / (sub['노출'].sum() + 1e-9)
             
+            avg_daily_impressions = sub['노출'].mean()
+            
+            if threshold_mode == "자동":
+                h_threshold = get_adaptive_threshold(p0_val, avg_daily_impressions)
+                ctr_factor_display = 0.6 if p0_val < 0.005 else (0.8 if p0_val < 0.01 else (1.0 if p0_val < 0.02 else 1.2))
+                volume_factor_display = 1.5 if avg_daily_impressions > 5000000 else (1.2 if avg_daily_impressions > 1000000 else 1.0)
+            else:
+                h_threshold = st.slider(
+                    "임계값 (h) 조정",
+                    min_value=-20.0,
+                    max_value=-3.0,
+                    value=-8.0,
+                    step=0.5,
+                    help="값이 작을수록(절댓값 클수록) 둔감, 클수록(절댓값 작을수록) 민감"
+                )
+            
             cusum_vals = get_binomial_cusum(sub['클릭'].values, sub['노출'].values, p0_val)
-            h_threshold, achieved_arl = estimate_h_via_arl(p0_val, sub['노출'].values, sims=200)
-            h_threshold = -h_threshold
             
             col1, col2, col3 = st.columns(3)
             col1.metric("기준 CTR (p0)", f"{p0_val*100:.2f}%")
             col2.metric("감지 임계값 (h)", f"{h_threshold:.2f}")
             col3.metric("현재 CUSUM", f"{cusum_vals[-1]:.2f}")
+            
+            if threshold_mode == "자동":
+                st.caption(f"📊 자동 계산: 기본값 -8.0 × CTR보정({ctr_factor_display}) × 노출보정({volume_factor_display}) = {h_threshold:.2f}")
+            
+            with st.expander("ℹ️ 임계값(h)은 왜 이 값인가요?", expanded=False):
+                st.markdown(f"""
+                ### 📐 CUSUM 임계값의 의미
+                
+                **임계값(h)은 "얼마나 민감하게 반응할 것인가"를 결정합니다.**
+                
+                ---
+                
+                ### 🎯 일반적인 CUSUM 임계값 범위
+                
+                | 임계값 범위 | 오경보율(FPR) | 평균 감지 시간 | 용도 |
+                |------------|--------------|---------------|------|
+                | **-3 ~ -5** | 20~30% | 1~2일 | 극도로 민감 (테스트 초기) |
+                | **-5 ~ -8** | 10~15% | 2~4일 | 민감 (단기 캠페인) |
+                | **-8 ~ -12** | 5~10% | 3~7일 | **표준** (대부분의 경우) |
+                | **-12 ~ -20** | 1~5% | 7~14일 | 보수적 (장기 안정 캠페인) |
+                
+                **오경보율(FPR):** 실제론 정상인데 "하락"이라고 잘못 판단하는 비율  
+                **평균 감지 시간:** 실제 15% 하락 시 평균 며칠 만에 감지하는가
+                
+                ---
+                
+                ### 🔧 현재 소재의 임계값: **{h_threshold:.2f}**
+                
+                """)
+                
+                if threshold_mode == "자동":
+                    st.markdown(f"""
+                    **자동 계산 근거:**
+                    
+                    **1단계: 기본값 설정**
+                    - 기본 임계값: **-8.0** (표준 범위)
+                    - 오경보율 ~10%, 감지 시간 3~4일 목표
+                    
+                    **2단계: CTR 수준 보정**
+                    - 현재 기준 CTR: **{p0_val*100:.2f}%**
+                    - CTR < 0.5%: 보정계수 **0.6** (희소 이벤트 → 더 민감하게)
+                    - CTR 0.5~1%: 보정계수 **0.8**
+                    - CTR 1~2%: 보정계수 **1.0** (표준)
+                    - CTR > 2%: 보정계수 **1.2** (안정적 → 더 보수적으로)
+                    - **적용된 보정:** {ctr_factor_display}
+                    
+                    **이유:** CTR이 낮으면 클릭 자체가 희소 → 변동이 크므로 민감도 높임
+                    
+                    **3단계: 노출 규모 보정**
+                    - 일평균 노출: **{avg_daily_impressions:,.0f}회**
+                    - 노출 < 100만: 보정계수 **1.0** (표준)
+                    - 노출 100~500만: 보정계수 **1.2**
+                    - 노출 > 500만: 보정계수 **1.5** (대규모 → 더 보수적으로)
+                    - **적용된 보정:** {volume_factor_display}
+                    
+                    **이유:** 노출이 많을수록 통계적 안정성 높음 → 작은 변화에 덜 민감해도 됨
+                    
+                    **최종 계산:**
+                    ```
+                    h = -8.0 × {ctr_factor_display} × {volume_factor_display} = {h_threshold:.2f}
+                    ```
+                    
+                    ---
+                    
+                    **이 값의 실무적 의미:**
+                    - 실제로 CTR이 15% 하락하면 평균 **{abs(int(h_threshold * 0.4))}~{abs(int(h_threshold * 0.5))}일** 내 감지
+                    - 정상 상황에서 오경보 발생 확률: 약 **{int(100 / abs(h_threshold * 1.2))}~{int(100 / abs(h_threshold))}%**
+                    - 한 달(30일) 운영 시 오경보 예상 횟수: **{30 * int(100 / abs(h_threshold * 1.2)) / 100:.1f}~{30 * int(100 / abs(h_threshold)) / 100:.1f}회**
+                    """)
+                else:
+                    st.markdown(f"""
+                    **수동 설정 가이드:**
+                    
+                    현재 설정값 **{h_threshold:.2f}**의 의미:
+                    
+                    **민감도:**
+                    - -3 ~ -5: 매우 민감 (2일 내 감지, 오경보 20%+)
+                    - -5 ~ -8: 민감 (3일 내 감지, 오경보 10~15%)
+                    - **-8 ~ -12: 표준** (4~6일 내 감지, 오경보 5~10%)
+                    - -12 ~ -20: 보수적 (7~14일 내 감지, 오경보 5% 미만)
+                    
+                    **현재 값({h_threshold:.2f})은 {"매우 민감" if h_threshold > -5 else ("민감" if h_threshold > -8 else ("표준" if h_threshold > -12 else "보수적"))} 수준입니다.**
+                    
+                    **조정 기준:**
+                    - 오경보가 너무 많다 → 값을 낮춤 (절댓값 키움, 예: -10 → -12)
+                    - 하락을 늦게 감지한다 → 값을 높임 (절댓값 줄임, 예: -10 → -8)
+                    - 신규 캠페인(불안정) → -5 ~ -8 권장
+                    - 안정기 캠페인 → -10 ~ -15 권장
+                    """)
+                
+                st.markdown("""
+                ---
+                
+                ### 📚 통계적 배경 (참고)
+                
+                **CUSUM 임계값의 이론적 근거:**
+                
+                1. **ARL (Average Run Length)**
+                   - ARL₀: 정상 상태에서 평균 몇 일 만에 알람 울리는가? (높을수록 좋음)
+                   - ARL₁: 실제 하락 시 평균 몇 일 만에 감지하는가? (낮을수록 좋음)
+                   - 목표: ARL₀ = 30일, ARL₁ = 3~5일
+                
+                2. **로그우도비(LLR) 기반**
+                   ```
+                   CUSUM = Σ LLR
+                   LLR = clicks × log(p₁/p₀) + (imps - clicks) × log((1-p₁)/(1-p₀))
+                   ```
+                   - p₀ = 기준 CTR (첫 7일)
+                   - p₁ = 감지 목표 CTR (p₀ × 0.85, 즉 15% 하락)
+                
+                3. **임계값 h의 선택**
+                   - h가 작을수록 (절댓값 클수록): ARL₀ 증가 (오경보 감소), ARL₁ 증가 (감지 느림)
+                   - h가 클수록 (절댓값 작을수록): ARL₀ 감소 (오경보 증가), ARL₁ 감소 (감지 빠름)
+                   - **trade-off**: 민감도 vs 정확도
+                
+                4. **왜 -8.0이 기본값?**
+                   - 산업 표준: Shewhart, Page의 연구에서 h=4~5σ 권장
+                   - 이항분포 → 로그우도비 변환 시 약 2배 스케일
+                   - 실무 경험상 h=-8 ± 3 범위가 가장 실용적
+                
+                **주의:** 위 수치는 근사값이며, 실제 성과는 데이터 특성에 따라 다를 수 있습니다.
+                """)
+
             
             fig_cusum = go.Figure()
             fig_cusum.add_trace(go.Scatter(
@@ -619,12 +786,23 @@ if uploaded_file:
             st.plotly_chart(fig_cusum, use_container_width=True)
             
             if cusum_vals[-1] < h_threshold:
+                delta = abs(cusum_vals[-1] - h_threshold)
+                severity = "🔴 심각" if delta > abs(h_threshold) * 2 else "🟡 경계"
+                
                 st.error(f"⚠️ **성과 하락 감지** (CUSUM: {cusum_vals[-1]:.2f} < 임계값: {h_threshold:.2f})")
+                st.markdown(f"**심각도:** {severity} (임계값 대비 {delta:.1f} 초과)")
+                
+                first_breach_idx = np.where(cusum_vals < h_threshold)[0]
+                if len(first_breach_idx) > 0:
+                    breach_date = sub.iloc[first_breach_idx[0]]['날짜'].strftime('%Y-%m-%d')
+                    st.markdown(f"**최초 감지일:** {breach_date}")
+                
                 st.markdown("""
                 **권장 조치:**
                 - 소재 즉시 교체 검토
                 - 타겟팅 설정 재확인
                 - 경쟁사 동향 분석
+                - 최근 CTR 실제값 확인 (조기 경고 Tab)
                 """)
             else:
                 st.success(f"✅ **정상 범위** (CUSUM: {cusum_vals[-1]:.2f})")
@@ -636,14 +814,60 @@ if uploaded_file:
                 - **음수 증가:** 성과가 지속적으로 하락 중
                 - **임계값 돌파:** 통계적으로 유의미한 하락 감지
                 
+                **심각도 판단:**
+                - **정상:** CUSUM > 임계값
+                - **경계:** 임계값 ~ 2배 초과
+                - **심각:** 2배 이상 초과 (실제 CTR 50% 이상 하락 가능성)
+                
                 **장점:**
                 - 작은 변화도 누적하여 조기 감지
                 - 일시적 변동과 구조적 하락 구분
+                - 통계적 엄밀성 (오경보율 제어)
                 
                 **한계:**
                 - 외부 요인(시즌, 경쟁사) 미반영
                 - 상승 전환 감지는 별도 설정 필요
+                - 기준 기간(첫 7일)이 비정상이면 전체 판단 왜곡
+                
+                **조기 경고(선형 회귀)와의 차이:**
+                - CUSUM: 기준점 대비 **절대적 하락** 감지 (단기, 민감)
+                - 선형 회귀: 시간 흐름상 **추세적 하락** 감지 (장기, 완만)
+                - 두 방법 모두 울리면 → 확실한 하락
+                - CUSUM만 울리면 → 최근 급락 (초기 버블 후 정상화 가능)
+                - 선형만 울리면 → 소재 피로도 진행 중
                 """)
+            
+            with st.expander("🔍 이 소재의 실제 성과 확인"):
+                st.markdown("**일별 CTR 추이:**")
+                daily_ctr_chart = sub[['날짜', 'CTR(%)']].copy()
+                fig_daily = go.Figure()
+                fig_daily.add_trace(go.Scatter(
+                    x=daily_ctr_chart['날짜'],
+                    y=daily_ctr_chart['CTR(%)'],
+                    mode='lines+markers',
+                    name='일별 CTR',
+                    line=dict(color='green', width=2)
+                ))
+                fig_daily.add_hline(
+                    y=p0_val*100,
+                    line_dash="dash",
+                    line_color="blue",
+                    annotation_text=f"기준 CTR ({p0_val*100:.2f}%)"
+                )
+                fig_daily.update_layout(
+                    yaxis_title="CTR (%)",
+                    xaxis_title="날짜",
+                    height=300
+                )
+                st.plotly_chart(fig_daily, use_container_width=True)
+                
+                st.markdown("**기간별 평균 비교:**")
+                col1, col2 = st.columns(2)
+                first_7_ctr = sub.head(7)['CTR(%)'].mean()
+                recent_7_ctr = sub.tail(7)['CTR(%)'].mean()
+                col1.metric("초반 7일 평균", f"{first_7_ctr:.2f}%")
+                col2.metric("최근 7일 평균", f"{recent_7_ctr:.2f}%", 
+                           delta=f"{recent_7_ctr - first_7_ctr:.2f}%p")
         
         st.markdown("---")
         
