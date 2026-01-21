@@ -56,20 +56,21 @@ def load_and_clean_data(uploaded_file):
 
 def analyze_empirical_bayes(df, benchmark_df=None, use_manual_prior=False):
     global_ctr = df['클릭'].sum() / (df['노출'].sum() + 1e-9)
-    id_stats = df.groupby('ID').agg({'클릭': 'sum', '노출': 'sum', '비용': 'sum', '상품': 'first'})
+    id_stats = df.groupby('ID').agg({'클릭': 'sum', '노출': 'sum', '비용': 'sum', '매체': 'first'})
     id_ctrs = id_stats['클릭'] / (id_stats['노출'] + 1e-9)
     
     agg = id_stats.reset_index()
     agg['raw_ctr'] = id_ctrs.values
     
     if use_manual_prior and benchmark_df is not None:
-        benchmark_dict = benchmark_df.set_index('상품')['업계평균CTR(%)'].to_dict()
+        benchmark_dict = benchmark_df.set_index('매체')['업계평균CTR(%)'].to_dict()
+        strength_dict = benchmark_df.set_index('매체')['Prior강도'].to_dict()
         
         for idx, row in agg.iterrows():
-            product = row['상품']
-            if product in benchmark_dict:
-                prior_ctr = benchmark_dict[product] / 100
-                prior_strength = benchmark_df[benchmark_df['상품'] == product]['Prior강도'].values[0]
+            media = row['매체']
+            if media in benchmark_dict:
+                prior_ctr = benchmark_dict[media] / 100
+                prior_strength = strength_dict[media]
                 
                 alpha_0 = prior_ctr * prior_strength
                 beta_0 = (1 - prior_ctr) * prior_strength
@@ -188,9 +189,9 @@ with st.sidebar:
         
         if 'benchmark_data' not in st.session_state:
             st.session_state.benchmark_data = pd.DataFrame({
-                '상품': ['RPG액션', '퍼즐'],
-                '업계평균CTR(%)': [1.2, 0.8],
-                'Prior강도': [100, 100]
+                '매체': ['네이버 GFA', '유튜브', 'GDN', '페이스북'],
+                '업계평균CTR(%)': [0.8, 2.5, 0.3, 1.2],
+                'Prior강도': [100, 100, 100, 100]
             })
         
         edited_benchmark = st.data_editor(
@@ -198,7 +199,7 @@ with st.sidebar:
             num_rows="dynamic",
             use_container_width=True,
             column_config={
-                '상품': st.column_config.TextColumn("상품명", help="데이터의 '상품' 컬럼과 일치해야 함"),
+                '매체': st.column_config.TextColumn("매체명", help="데이터의 '매체' 컬럼과 정확히 일치해야 함"),
                 '업계평균CTR(%)': st.column_config.NumberColumn("업계 평균 CTR (%)", min_value=0.0, max_value=10.0, format="%.2f"),
                 'Prior강도': st.column_config.NumberColumn("Prior 강도", min_value=10, max_value=1000, help="높을수록 벤치마크 의존도 증가")
             }
@@ -433,12 +434,12 @@ if uploaded_file:
             if use_manual_prior:
                 st.success("✅ 수동 설정 모드 (벤치마크 기반)")
                 
-                prior_summary = res_agg[['ID', '상품', 'alpha_0', 'beta_0']].copy()
+                prior_summary = res_agg[['ID', '매체', 'alpha_0', 'beta_0']].copy()
                 prior_summary['Prior_CTR(%)'] = (prior_summary['alpha_0'] / (prior_summary['alpha_0'] + prior_summary['beta_0'])) * 100
                 prior_summary['Prior_강도'] = prior_summary['alpha_0'] + prior_summary['beta_0']
                 
                 st.dataframe(
-                    prior_summary[['ID', '상품', 'Prior_CTR(%)', 'Prior_강도']].style.format({
+                    prior_summary[['ID', '매체', 'Prior_CTR(%)', 'Prior_강도']].style.format({
                         'Prior_CTR(%)': '{:.2f}',
                         'Prior_강도': '{:.0f}'
                     }),
@@ -710,7 +711,7 @@ else:
         #### ✨ 핵심 기능
         
         **1. 벤치마크 기반 Prior 설정**
-        - 상품별 업계 평균 CTR 입력
+        - 매체별 업계 평균 CTR 입력
         - Prior 강도 조정 (10~1000)
         - 소량 데이터에서도 안정적 추정
         
@@ -730,7 +731,8 @@ else:
         #### 🎯 활용 시나리오
         
         **신규 캠페인 런칭 (D+1~14)**
-        - 벤치마크 CTR 입력 → Prior 안정화
+        - 벤치마크 CTR 입력 (예: 네이버 GFA 0.8%, 유튜브 2.5%)
+        - Prior로 매체 특성 반영
         - 2-3일 데이터로 초기 판단
         - CUSUM으로 빠른 이상 감지
         
@@ -755,7 +757,8 @@ else:
     
     **2단계: Prior 설정 선택**
     - **자동**: 현재 데이터로 Prior 추정 (14일 이상 데이터 있을 때)
-    - **수동**: 상품별 업계 벤치마크 입력 (2주 미만 데이터일 때 권장)
+    - **수동**: 매체별 업계 벤치마크 입력 (2주 미만 데이터일 때 권장)
+      - 예: 네이버 GFA 0.8%, 유튜브 2.5%, GDN 0.3%
     
     **3단계: 분석 실행**
     - 주간 체크리스트에서 액션 아이템 확인
